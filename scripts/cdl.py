@@ -218,7 +218,7 @@ def extract_for_account(account: Dict, target_day: int, test_day: int) -> pd.Dat
             time.sleep(2)
             
             # Click submenu
-            safe_click(driver, By.XPATH, "/html/body/nav[1]/div/ul/li[3]/ul/li[3]/a/span")
+            safe_click(driver, By.XPATH, "/html/body/nav[1]/div/ul/li[3]/ul/li[3]")
             time.sleep(3)
             take_screenshot(driver, f"{account['name']}_after_navigation")
             
