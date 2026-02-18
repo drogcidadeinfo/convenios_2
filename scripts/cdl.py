@@ -85,6 +85,7 @@ def extract_for_account(account, target_day, test_day):
 
         # navigation (keep your locators)
         wait.until(EC.element_to_be_clickable((By.XPATH, "/html/body/nav[1]/div/ul/li[3]/a/span"))).click()
+        time.sleep(3)
         wait.until(EC.element_to_be_clickable((By.XPATH, "/html/body/nav[1]/div/ul/li[3]/ul/li[3]/a/span"))).click()
         time.sleep(3)
 
