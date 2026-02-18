@@ -175,8 +175,22 @@ def main():
 
     final_df = pd.concat(all_dfs, ignore_index=True)
 
-    # Optional: de-duplicate before pushing (example)
-    # final_df = final_df.drop_duplicates(subset=["account","local","data","vencimento","parcela","valor"])
+    # Map old column names to new spreadsheet header names
+    column_mapping = {
+        "account": "Filial",
+        "local": "Cliente",
+        "data": "Data Emissão",
+        "parcela": "Parcela",
+        "valor": "Valor"
+    }
+    
+    # Rename columns
+    final_df = final_df.rename(columns=column_mapping)
+    
+    # Keep only the columns you want, in correct order
+    final_df = final_df[
+        ["Filial", "Cliente", "Data Emissão", "Parcela", "Valor"]
+    ]
 
     append_df_to_sheet(final_df, spreadsheet_id, worksheet_name)
     logging.info("✅ Done")
