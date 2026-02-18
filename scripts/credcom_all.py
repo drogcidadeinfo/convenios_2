@@ -45,7 +45,7 @@ def append_df_to_sheet(df: pd.DataFrame, spreadsheet_id: str, worksheet_name: st
     # Append rows
     ws.append_rows(df.values.tolist(), value_input_option="RAW")
     logging.info(f"✅ Appended {len(df)} rows to {worksheet_name}")
-    logging.info("\n" + final_df.head(5).to_string())
+    logging.info("\n" + df.head(5).to_string())
 
 # -----------------------
 # Selenium helpers
