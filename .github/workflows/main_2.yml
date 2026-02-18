@@ -1,0 +1,30 @@
+name: Extrato -> Google Sheets
+
+on:
+  workflow_dispatch:
+  # schedule:
+    # - cron: "15 6 * * *"  # 06:15 UTC (adjust)
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install selenium pandas gspread google-auth
+
+      - name: Run extraction
+        env:
+          SITE_ACCOUNTS_JSON: ${{ secrets.SITE_ACCOUNTS_JSON }}
+          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          WORKSHEET_NAME: extrato_raw
+        run: |
+          python scripts/credcom_all.py
