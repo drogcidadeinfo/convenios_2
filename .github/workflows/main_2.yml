@@ -37,3 +37,11 @@ jobs:
           WORKSHEET_NAME: dados_cred_commerce
         run: |
           python scripts/cdl.py
+
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: debug_screenshots/
+
