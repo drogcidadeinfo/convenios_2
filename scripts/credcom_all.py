@@ -157,7 +157,7 @@ def extract_for_account(account, target_day, test_day):
 def main():
     accounts = json.loads(os.environ["SITE_ACCOUNTS_JSON"])
     spreadsheet_id = os.environ["SPREADSHEET_ID"]
-    worksheet_name = os.environ.get("WORKSHEET_NAME", "extrato_raw")
+    worksheet_name = os.environ.get("WORKSHEET_NAME", "CRED_COMM_ACC_JSON")
 
     yesterday = datetime.now() - timedelta(days=1)
     target_day = yesterday.day
