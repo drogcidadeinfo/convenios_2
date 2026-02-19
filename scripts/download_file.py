@@ -23,10 +23,8 @@ if not username or not password:
 
 # Calculate date range
 today = datetime.today()
-fim_date = today - timedelta(days=1)
-inicio_date = datetime(today.year - 1, 1, 1)
-inicio = inicio_date.strftime('%d/%m/%Y')
-fim = fim_date.strftime('%d/%m/%Y')
+yesterday = today - timedelta(days=1)
+target_day = yesterday.strftime('%d/%m/%Y')
 
 download_dir = os.getcwd()
 
@@ -86,15 +84,29 @@ try:
     time.sleep(10)
   
     WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "sel_contas_2"))).click()
+    WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "agrup_fil_2"))).click()
     time.sleep(2)
+    WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "tabTabdhtmlgoodies_tabView1_1"))).click()
+    time.sleep(2)
+    empresas = [
+            "221", "223", "224", "225", "287", "250", "199", "208", "255", "271"
+        ]
+        
+        for codigo in empresas:
+            input_element = WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.ID, "cod_empresaEntrada"))
+            )
+            input_element.send_keys(codigo)
+            input_element.send_keys(Keys.ENTER)
+            time.sleep(2)
     WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "tabTabdhtmlgoodies_tabView1_2"))).click()
     time.sleep(2)
-    WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "sel2_3"))).click()
+    WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "selecao_periodo_emiLabel"))).click()
     time.sleep(2)
 
-    driver.find_element(By.ID, "dat_init").send_keys(inicio)
+    driver.find_element(By.ID, "dat_init").send_keys("01022026")
     time.sleep(5)
-    driver.find_element(By.ID, "dat_fim").send_keys(fim)
+    driver.find_element(By.ID, "dat_fim").send_keys("18022026")
     time.sleep(2)
         
     # report format; downloads pdf file
@@ -122,7 +134,7 @@ try:
         downloaded_file_path = os.path.join(download_dir, most_recent_file)
     
         # rename the file
-        new_filename = "convenio.xls"
+        new_filename = "credcommerce.xls"
         new_filepath = os.path.join(download_dir, new_filename)
     
         os.rename(downloaded_file_path, new_filepath)
