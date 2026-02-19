@@ -94,24 +94,26 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
         # Se não encontrar, usar a última coluna (que geralmente é a de valor)
         coluna_valor = df.columns[-1]
 
-    # Inicializar colunas vazias para Filial e Cliente
-    df['Filial'] = np.nan
-    df['Cliente'] = np.nan
+    # Inicializar colunas vazias para Filial e Cliente como object dtype (string)
+    df['Filial'] = None
+    df['Cliente'] = None
+    df['Filial'] = df['Filial'].astype('object')
+    df['Cliente'] = df['Cliente'].astype('object')
 
     # Variáveis para armazenar o último Filial e Cliente encontrados
-    current_filial = np.nan
-    current_cliente = np.nan
+    current_filial = None
+    current_cliente = None
 
     # Percorrer o dataframe para preencher Filial e Cliente
     for idx, row in df.iterrows():
         # Verificar se a linha contém "Filial:" na coluna A (Unnamed: 1)
         if pd.notna(row.get('Unnamed: 1', '')) and 'Filial:' in str(row.get('Unnamed: 1', '')):
-            current_filial = row.get('Unnamed: 12', np.nan)  # O valor da filial está na coluna C
+            current_filial = row.get('Unnamed: 12', None)  # O valor da filial está na coluna C
             df.at[idx, 'Filial'] = current_filial
         
         # Verificar se a linha contém "Cliente:" na coluna A
         elif pd.notna(row.get('Unnamed: 1', '')) and 'Cliente:' in str(row.get('Unnamed: 1', '')):
-            current_cliente = row.get('Unnamed: 12', np.nan)  # O valor do cliente está na coluna C
+            current_cliente = row.get('Unnamed: 12', None)  # O valor do cliente está na coluna C
             df.at[idx, 'Cliente'] = current_cliente
         
         # Para linhas de parcelas (onde Unnamed:1 é vazio ou NaN)
@@ -154,9 +156,11 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
     df_final = df_final.rename(columns=novos_nomes)
 
     def extrair_numero_filial(texto):
-        if pd.isna(texto):
+        if pd.isna(texto) or texto is None:
             return None
-        match = re.search(r'F(\d+)', str(texto))
+        # Convert to string if it's not already
+        texto_str = str(texto)
+        match = re.search(r'F(\d+)', texto_str)
         if match:
             return int(match.group(1))
         return None
@@ -170,7 +174,6 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
     logging.info(f"  -> {os.path.basename(file_path)}: {len(df_final)} clean rows")
     
     return df_final
-
 
 # -------------------------------------------------
 # Google Sheets update
