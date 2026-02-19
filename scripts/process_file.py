@@ -167,6 +167,10 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
 
     # Aplicar à coluna 'Filial' existente
     df_final['Filial'] = df_final['Filial'].apply(extrair_numero_filial)
+    # Define the desired column order
+    colunas_ordenadas = ['Filial', 'Cliente', 'Data Emissão', 'Parcela', 'Valor']         
+    # Reorder the DataFrame
+    df_final = df_final[colunas_ordenadas]
 
     # Resetar o índice
     df_final.reset_index(drop=True, inplace=True)
