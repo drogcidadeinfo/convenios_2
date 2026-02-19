@@ -32,4 +32,10 @@ jobs:
           username: ${{ secrets.USERNAME }}
           password: ${{ secrets.PASSWORD }}
         run: python scripts/download_file.py
-
+        
+      - name: Upload data to spreadsheet
+        env:
+          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: |
+          python scripts/process_file.py
