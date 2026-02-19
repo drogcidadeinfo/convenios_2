@@ -92,7 +92,7 @@ try:
             "221", "223", "224", "225", "287", "250", "199", "208", "255", "271"
         ]
         
-        for codigo in empresas:
+    for codigo in empresas:
             input_element = WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.ID, "cod_empresaEntrada"))
             )
