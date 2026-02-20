@@ -20,14 +20,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install selenium pandas gspread google-auth
 
-      #- name: Run extraction for SG and Santiago
-        #env:
-          #CRED_COMM_ACC_JSON: ${{ secrets.CRED_COMM_ACC_JSON }}
-          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          #WORKSHEET_NAME: dados_cred_commerce
-        #run: |
-          #python scripts/credcom_all.py
+      - name: Run extraction for SG and Santiago
+        env:
+          CRED_COMM_ACC_JSON: ${{ secrets.CRED_COMM_ACC_JSON }}
+          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          WORKSHEET_NAME: dados_cred_commerce
+        run: |
+          python scripts/credcom_all.py
 
       - name: Run extraction 
         env:
