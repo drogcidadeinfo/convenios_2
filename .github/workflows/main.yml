@@ -25,17 +25,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install selenium pandas openpyxl xlrd gspread google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client packaging
+          pip install selenium pandas openpyxl xlrd numpy gspread google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client packaging
       
-      - name: Download main table
-        env:
-          username: ${{ secrets.USERNAME }}
-          password: ${{ secrets.PASSWORD }}
-        run: python scripts/download_file.py
+      #- name: Download main table
+        #env:
+          #username: ${{ secrets.USERNAME }}
+          #password: ${{ secrets.PASSWORD }}
+        #run: python scripts/download_file.py
         
       - name: Upload data to spreadsheet
         env:
           GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: |
-          python scripts/process_file.py
+          python scripts/data_comb.py
