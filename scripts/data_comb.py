@@ -11,7 +11,7 @@ def get_google_sheets_data(sheet_id, sheet_name):
     Read data from Google Sheets using service account from environment variable
     """
     # Get service account info from environment variable
-    service_account_info = json.loads(os.environ.get('GOOGLE_SHEETS_SERVICE_ACCOUNT'))
+    service_account_info = json.loads(os.environ.get('GSERVICE_JSON'))
     
     # Define the scope
     scope = ['https://spreadsheets.google.com/feeds',
