@@ -3,7 +3,6 @@ import numpy as np
 from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
-from google.colab import auth  # If using Colab
 import json
 
 def get_google_sheets_data(sheet_id, sheet_name):
