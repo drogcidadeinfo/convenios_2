@@ -8,28 +8,23 @@ import json
 
 def get_google_sheets_data(sheet_id, sheet_name):
     """
-    Read data from Google Sheets
+    Read data from Google Sheets using service account from environment variable
     """
-    # For local development, use service account
-    # For Colab, use user authentication
+    # Get service account info from environment variable
+    service_account_info = json.loads(os.environ.get('GOOGLE_SHEETS_SERVICE_ACCOUNT'))
     
-    try:
-        # Try Colab authentication first
-        auth.authenticate_user()
-        from google.auth import default
-        creds, _ = default()
-        gc = gspread.authorize(creds)
-    except:
-        # Fall back to service account for local development
-        scope = ['https://spreadsheets.google.com/feeds',
-                 'https://www.googleapis.com/auth/drive']
-        
-        # You'll need to download service account JSON from Google Cloud Console
-        # and add it as a secret in GitHub
-        creds = Credentials.from_service_account_file(
-            'service-account.json', scopes=scope
-        )
-        gc = gspread.authorize(creds)
+    # Define the scope
+    scope = ['https://spreadsheets.google.com/feeds',
+             'https://www.googleapis.com/auth/drive']
+    
+    # Create credentials using the service account info
+    creds = Credentials.from_service_account_info(
+        service_account_info, 
+        scopes=scope
+    )
+    
+    # Authorize with gspread
+    gc = gspread.authorize(creds)
     
     # Open the spreadsheet
     workbook = gc.open_by_key(sheet_id)
