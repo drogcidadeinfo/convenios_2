@@ -1,4 +1,4 @@
-import re, os
+import re, os, json
 import unicodedata
 from datetime import datetime
 import pandas as pd
@@ -219,7 +219,7 @@ def write_values_chunked(ws, values, start_cell="A1", chunk_size=500):
 def main():
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(
-        GSERVICE_JSON,
+        json.loads(os.environ["GSERVICE_JSON"]),
         scopes=scopes
     )
     gc = gspread.authorize(creds)
