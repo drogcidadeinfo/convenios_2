@@ -79,9 +79,8 @@ def token_match_score(tokens_a: set, tokens_b: set) -> int:
 # ----------------------------
 def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> list[list]:
     # Normaliza colunas esperadas
-    # Ajuste nomes se necessário para bater com o seu sheet:
     # Filial | Cliente | Data Emissão | Valor
-    required_cols = ["Filial", "Cliente", "Data Emissão", "Valor"]
+    required_cols = ["Filial", "Cliente", "Data Emissão", "Parcela", "Valor"]
     for c in required_cols:
         if c not in df_trier.columns:
             raise ValueError(f"Coluna '{c}' não encontrada em {SHEET_TRIER}")
