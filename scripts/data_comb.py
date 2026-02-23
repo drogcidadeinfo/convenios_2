@@ -18,12 +18,25 @@ HEADER = ["Filial", "Data Emissão", "TRIER", "Valor", "CREDCOM", "Valor", "STAT
 # tolerância de diferença de valor (para arredondamentos)
 VALUE_TOL = 0.05
 
+
 # ----------------------------
 # Helpers
 # ----------------------------
 def strip_accents(s: str) -> str:
     s = unicodedata.normalize("NFKD", s)
     return "".join(ch for ch in s if not unicodedata.combining(ch))
+
+def normalize_colname(x: str) -> str:
+    # remove NBSP, normaliza espaços, remove acentos, lowercase
+    s = str(x).replace("\xa0", " ").strip()
+    s = strip_accents(s)
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    return s
+
+def normalize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [normalize_colname(c) for c in df.columns]
+    return df
 
 def name_tokens(name: str) -> set:
     if name is None:
@@ -66,7 +79,8 @@ def parse_date_br(x):
     if isinstance(x, (datetime, pd.Timestamp)):
         return pd.to_datetime(x).date()
     s = str(x).strip()
-    return pd.to_datetime(s, dayfirst=True, errors="coerce").date()
+    d = pd.to_datetime(s, dayfirst=True, errors="coerce")
+    return None if pd.isna(d) else d.date()
 
 def token_match_score(tokens_a: set, tokens_b: set) -> int:
     # score simples: quantas palavras em comum
@@ -74,48 +88,51 @@ def token_match_score(tokens_a: set, tokens_b: set) -> int:
         return 0
     return len(tokens_a.intersection(tokens_b))
 
+
 # ----------------------------
 # Core: build output rows
 # ----------------------------
 def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> list[list]:
-    # Normaliza colunas esperadas
-    # Filial | Cliente | Data Emissão | Valor
-    required_cols = ["Filial", "Cliente", "Data Emissão", "Parcela", "Valor"]
-    for c in required_cols:
-        if c not in df_trier.columns:
-            raise ValueError(f"Coluna '{c}' não encontrada em {SHEET_TRIER}")
-        if c not in df_cred.columns:
-            raise ValueError(f"Coluna '{c}' não encontrada em {SHEET_CREDCOM}")
+    # Normaliza nomes das colunas (evita "Valor " / NBSP / variações)
+    t = normalize_df_columns(df_trier)
+    c = normalize_df_columns(df_cred)
 
-    t = df_trier.copy()
-    c = df_cred.copy()
+    # Filial | Cliente | Data Emissão | Parcela | Valor
+    required_cols = ["filial", "cliente", "data emissao", "parcela", "valor"]
+    for col in required_cols:
+        if col not in t.columns:
+            raise ValueError(f"Coluna '{col}' não encontrada em {SHEET_TRIER}. Achei: {list(t.columns)}")
+        if col not in c.columns:
+            raise ValueError(f"Coluna '{col}' não encontrada em {SHEET_CREDCOM}. Achei: {list(c.columns)}")
 
-    t["Filial"] = pd.to_numeric(t["Filial"], errors="coerce").astype("Int64")
-    c["Filial"] = pd.to_numeric(c["Filial"], errors="coerce").astype("Int64")
+    t["filial"] = pd.to_numeric(t["filial"], errors="coerce").astype("Int64")
+    c["filial"] = pd.to_numeric(c["filial"], errors="coerce").astype("Int64")
 
-    t["Data_Emissao"] = t["Data Emissão"].apply(parse_date_br)
-    c["Data_Emissao"] = c["Data Emissão"].apply(parse_date_br)
+    t["Data_Emissao"] = t["data emissao"].apply(parse_date_br)
+    c["Data_Emissao"] = c["data emissao"].apply(parse_date_br)
 
-    t["Valor_num"] = t["Valor"].apply(parse_brl_money)
-    c["Valor_num"] = c["Valor"].apply(parse_brl_money)
+    t["Valor_num"] = t["valor"].apply(parse_brl_money)
+    c["Valor_num"] = c["valor"].apply(parse_brl_money)
 
-    t["tokens"] = t["Cliente"].apply(name_tokens)
-    c["tokens"] = c["Cliente"].apply(name_tokens)
+    t["tokens"] = t["cliente"].apply(name_tokens)
+    c["tokens"] = c["cliente"].apply(name_tokens)
 
     # remove linhas inválidas (sem filial ou data)
-    t = t.dropna(subset=["Filial", "Data_Emissao"])
-    c = c.dropna(subset=["Filial", "Data_Emissao"])
+    t = t.dropna(subset=["filial", "Data_Emissao"])
+    c = c.dropna(subset=["filial", "Data_Emissao"])
 
     # agrupa por (Filial, Data)
     out_rows = []
 
-    keys = sorted(set(zip(t["Filial"].astype(int), t["Data_Emissao"])) |
-                  set(zip(c["Filial"].astype(int), c["Data_Emissao"])),
-                  key=lambda x: (x[1], x[0]))  # (date, filial)
+    keys = sorted(
+        set(zip(t["filial"].astype(int), t["Data_Emissao"])) |
+        set(zip(c["filial"].astype(int), c["Data_Emissao"])),
+        key=lambda x: (x[1], x[0])  # (date, filial)
+    )
 
     for filial, dt in keys:
-        tg = t[(t["Filial"].astype(int) == filial) & (t["Data_Emissao"] == dt)].reset_index(drop=True)
-        cg = c[(c["Filial"].astype(int) == filial) & (c["Data_Emissao"] == dt)].reset_index(drop=True)
+        tg = t[(t["filial"].astype(int) == filial) & (t["Data_Emissao"] == dt)].reset_index(drop=True)
+        cg = c[(c["filial"].astype(int) == filial) & (c["Data_Emissao"] == dt)].reset_index(drop=True)
 
         used_c = set()
 
@@ -136,10 +153,10 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
             if best_j is not None and best_score >= 2:
                 used_c.add(best_j)
 
-                t_name = str(tg.at[i, "Cliente"])
+                t_name = str(tg.at[i, "cliente"])
                 t_val = tg.at[i, "Valor_num"]
 
-                c_name = str(cg.at[best_j, "Cliente"])
+                c_name = str(cg.at[best_j, "cliente"])
                 c_val = cg.at[best_j, "Valor_num"]
 
                 if (t_val is not None) and (c_val is not None) and abs(float(t_val) - float(c_val)) <= VALUE_TOL:
@@ -158,7 +175,7 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
                 ])
             else:
                 # sem match no CREDCOM
-                t_name = str(tg.at[i, "Cliente"])
+                t_name = str(tg.at[i, "cliente"])
                 t_val = tg.at[i, "Valor_num"]
                 out_rows.append([
                     filial,
@@ -174,7 +191,7 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
         for j in range(len(cg)):
             if j in used_c:
                 continue
-            c_name = str(cg.at[j, "Cliente"])
+            c_name = str(cg.at[j, "cliente"])
             c_val = cg.at[j, "Valor_num"]
             out_rows.append([
                 filial,
@@ -188,13 +205,13 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
 
     # ordena para ficar bem “conferência”
     def sort_key(r):
-        # r: [Filial, Data Emissão, ...]
         d = pd.to_datetime(r[1], dayfirst=True, errors="coerce")
         f = int(r[0]) if r[0] != "-" else 9999
         return (d, f, str(r[2]), str(r[4]))
 
     out_rows.sort(key=sort_key)
     return out_rows
+
 
 # ----------------------------
 # Google Sheets I/O
@@ -208,19 +225,22 @@ def upsert_worksheet(sh, title: str, rows: int = 2000, cols: int = 10):
 
 def write_values_chunked(ws, values, start_cell="A1", chunk_size=500):
     # values is list of lists
-    # chunk updates to avoid limits
     for i in range(0, len(values), chunk_size):
-        chunk = values[i:i+chunk_size]
+        chunk = values[i:i + chunk_size]
         start_row = 1 + i  # 1-indexed
         cell = f"A{start_row}"
         ws.update(cell, chunk, value_input_option="RAW")
 
 def main():
+    if not SPREADSHEET_ID:
+        raise ValueError("SPREADSHEET_ID não definido no ambiente.")
+
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(
         json.loads(os.environ["GSERVICE_JSON"]),
         scopes=scopes
     )
+
     gc = gspread.authorize(creds)
     sh = gc.open_by_key(SPREADSHEET_ID)
 
