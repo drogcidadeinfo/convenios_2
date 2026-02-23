@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 SHEET_TRIER = "dados_trier"
 SHEET_CREDCOM = "dados_cred_commerce"
-SHEET_OUT = "conferencia_diaria"
+SHEET_OUT = "TRIERxCREDCOM"
 
 HEADER = ["Filial", "Data Emissão", "TRIER", "Valor", "CREDCOM", "Valor", "STATUS"]
 
