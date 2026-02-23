@@ -88,6 +88,45 @@ def token_match_score(tokens_a: set, tokens_b: set) -> int:
         return 0
     return len(tokens_a.intersection(tokens_b))
 
+def parse_parcela_trier(x):
+    """
+    "PARCELA 8/10" -> (8, "PARCELA 8/10")
+    "8/10" -> (8, "PARCELA 8/10")  (se vier sem a palavra)
+    """
+    if x is None:
+        return (None, None)
+    s = str(x).strip().upper()
+    if not s or s == "-":
+        return (None, None)
+
+    m = re.search(r"(\d+)\s*/\s*(\d+)", s)
+    if m:
+        n = int(m.group(1))
+        total = int(m.group(2))
+        return (n, f"PARCELA {n}/{total}")
+
+    # fallback: pega primeiro número
+    m = re.search(r"\d+", s)
+    if m:
+        n = int(m.group(0))
+        return (n, f"PARCELA {n}")
+    return (None, None)
+
+def parse_parcela_credcom(x):
+    """
+    7 -> (7, "PARCELA 7")
+    "7" -> (7, "PARCELA 7")
+    """
+    if x is None:
+        return (None, None)
+    s = str(x).strip()
+    if not s or s == "-":
+        return (None, None)
+    m = re.search(r"\d+", s)
+    if not m:
+        return (None, None)
+    n = int(m.group(0))
+    return (n, f"PARCELA {n}")
 
 # ----------------------------
 # Core: build output rows
@@ -117,6 +156,14 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
     t["tokens"] = t["cliente"].apply(name_tokens)
     c["tokens"] = c["cliente"].apply(name_tokens)
 
+    # ----------------------------
+    # NEW: extrair parcela_num + texto de parcela para mostrar na conferência
+    # ----------------------------
+    # TRIER: "PARCELA 8/10" -> parcela_num=8, parcela_txt="PARCELA 8/10"
+    t[["parcela_num", "parcela_txt"]] = t["parcela"].apply(lambda x: pd.Series(parse_parcela_trier(x)))
+    # CREDCOM: "8" -> parcela_num=8, parcela_txt="PARCELA 8"
+    c[["parcela_num", "parcela_txt"]] = c["parcela"].apply(lambda x: pd.Series(parse_parcela_credcom(x)))
+
     # remove linhas inválidas (sem filial ou data)
     t = t.dropna(subset=["filial", "Data_Emissao"])
     c = c.dropna(subset=["filial", "Data_Emissao"])
@@ -141,9 +188,23 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
             best_j = None
             best_score = 0
 
+            tp = tg.at[i, "parcela_num"]
+
             for j in range(len(cg)):
                 if j in used_c:
                     continue
+
+                cp = cg.at[j, "parcela_num"]
+
+                # NEW: se os dois tiverem parcela_num, exige que sejam iguais
+                if tp is not None and cp is not None:
+                    try:
+                        if int(tp) != int(cp):
+                            continue
+                    except Exception:
+                        # se der algum problema estranho, não bloqueia por parcela
+                        pass
+
                 score = token_match_score(tg.at[i, "tokens"], cg.at[j, "tokens"])
                 if score > best_score:
                     best_score = score
@@ -153,10 +214,19 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
             if best_j is not None and best_score >= 2:
                 used_c.add(best_j)
 
+                # NEW: incluir parcela no texto do cliente (TRIER mostra N/X; CREDCOM só número)
+                t_parc = tg.at[i, "parcela_txt"]
+                c_parc = cg.at[best_j, "parcela_txt"]
+
                 t_name = str(tg.at[i, "cliente"])
-                t_val = tg.at[i, "Valor_num"]
+                if t_parc:
+                    t_name = f"{t_name} — {t_parc}"
 
                 c_name = str(cg.at[best_j, "cliente"])
+                if c_parc:
+                    c_name = f"{c_name} — {c_parc}"
+
+                t_val = tg.at[i, "Valor_num"]
                 c_val = cg.at[best_j, "Valor_num"]
 
                 if (t_val is not None) and (c_val is not None) and abs(float(t_val) - float(c_val)) <= VALUE_TOL:
@@ -175,7 +245,11 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
                 ])
             else:
                 # sem match no CREDCOM
+                t_parc = tg.at[i, "parcela_txt"]
                 t_name = str(tg.at[i, "cliente"])
+                if t_parc:
+                    t_name = f"{t_name} — {t_parc}"
+
                 t_val = tg.at[i, "Valor_num"]
                 out_rows.append([
                     filial,
@@ -191,7 +265,12 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
         for j in range(len(cg)):
             if j in used_c:
                 continue
+
+            c_parc = cg.at[j, "parcela_txt"]
             c_name = str(cg.at[j, "cliente"])
+            if c_parc:
+                c_name = f"{c_name} — {c_parc}"
+
             c_val = cg.at[j, "Valor_num"]
             out_rows.append([
                 filial,
@@ -211,7 +290,6 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
 
     out_rows.sort(key=sort_key)
     return out_rows
-
 
 # ----------------------------
 # Google Sheets I/O
