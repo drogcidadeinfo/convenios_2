@@ -59,14 +59,14 @@ try:
     time.sleep(2.5)
     print("Pop-up fechado com sucesso.")
 
-    WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="menuBar"]/li[11]/a/span[2]'))).click()
-    time.sleep(2)
-    WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="ul123"]/li[2]/a/span'))).click()
-    time.sleep(2)
-    WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="ul124"]/li[9]/a/span'))).click()
-    time.sleep(2)
-    WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="ul135"]/li[3]/a/span'))).click()
-    time.sleep(2)
+    # access "Compras Fornecedores"
+    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "sideMenuSearch")))
+    driver.find_element(By.ID, "sideMenuSearch").send_keys("Contas Receber ou Recebidas")
+    driver.find_element(By.ID, "sideMenuSearch").click()
+    time.sleep(5)
+
+    driver.find_element(By.CSS_SELECTOR, '[title="Contas Receber ou Recebidas"]').click()
+    time.sleep(5)
   
     WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="agrup_fil_2"]'))).click()
     print('selecao: agrupar por filial')
