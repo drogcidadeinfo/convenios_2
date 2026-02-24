@@ -27,14 +27,22 @@ download_dir = os.getcwd()
 chrome_options = Options()
 chrome_options.add_argument("--headless")  
 chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-gpu")
+chrome_options.add_argument("--enable-downloads")  # Explicitly enable downloads
+chrome_options.add_argument("--remote-debugging-port=9222")
+chrome_options.add_argument("--disable-popup-blocking")
 chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--start-maximized")
+chrome_options.add_argument("--window-size=1920,1080")  # Set dimensions
+chrome_options.add_argument("--start-maximized")  # Maximize window
+chrome_options.add_argument("--force-device-scale-factor=1")  # Prevent scaling
 
 prefs = {
     "download.default_directory": download_dir,  # set download path
+    "plugins.always_open_pdf_externally": True, # auto-downloads pdf files instead of opening in new window
+    "download.open_pdf_in_system_reader": False,
+    "pdfjs.disabled": True,  # Disable built-in PDF viewer
     "download.prompt_for_download": False,  # disable prompt
     "directory_upgrade": True,  # auto-overwrite existing files
-    "safebrowsing.enabled": False,  # disable safe browsing (meh)
     "safebrowsing.disable_download_protection": True
 }
 chrome_options.add_experimental_option("prefs", prefs)
