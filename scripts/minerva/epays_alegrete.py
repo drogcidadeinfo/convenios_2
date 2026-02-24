@@ -67,12 +67,12 @@ try:
 
     for tentativa in range(tentativas):
         try:
-            time.sleep(1)
+            time.sleep(5)
             campo_empresa = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="empresa"]')))
             campo_empresa.clear()
             campo_empresa.send_keys(empresa_nome)
             print(f'{empresa_nome} escrito (tentativa {tentativa+1})')
-            time.sleep(2)
+            time.sleep(5)
 
             sugestao = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.XPATH, '//*[@id="ngb-typeahead-0-0"]/ngb-highlight/span'))
@@ -118,7 +118,7 @@ try:
 
     # get the most recent downloaded file
     files = os.listdir(download_dir)
-    downloaded_files = [f for f in files if f.endswith('.xls')]
+    downloaded_files = [f for f in files if f.endswith('.xlsx')]
     if downloaded_files:
         # sort files by modifi time
         downloaded_files.sort(key=lambda x: os.path.getmtime(os.path.join(download_dir, x)))
