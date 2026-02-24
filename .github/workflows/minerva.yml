@@ -42,11 +42,11 @@ jobs:
       - name: download minerva/alegrete file 
         env:
           minerva_username: ${{ secrets.MINERVA_USERNAME }}
-          minerva_password: ${{ secrets.MINERVA_PASSWORDD }}
+          minerva_password: ${{ secrets.MINERVA_PASSWORD }}
         run: python scripts/minerva/epays_alegrete.py
 
       - name: download minerva/sg file 
         env:
           minerva_username: ${{ secrets.MINERVA_USERNAME }}
-          minerva_password: ${{ secrets.MINERVA_PASSWORDD }}
+          minerva_password: ${{ secrets.MINERVA_PASSWORD }}
         run: python scripts/minerva/epays_sg.py
