@@ -189,7 +189,7 @@ def update_google_sheet(df: pd.DataFrame, sheet_id: str):
 
     client = gspread.authorize(creds)
 
-    update_worksheet(df, sheet_id, "dados_trier_alegrete", client)
+    update_worksheet(df, sheet_id, "dados_trier_sg", client)
 
 
 # -------------------------------------------------
