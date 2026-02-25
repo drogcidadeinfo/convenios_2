@@ -33,20 +33,26 @@ jobs:
           #password: ${{ secrets.PASSWORD }}
         #run: python scripts/minerva/trier_alegrete.py
         
-      #- name: download trier/sg file 
+      - name: download trier/sg file 
+        env:
+          username: ${{ secrets.USERNAME }}
+          password: ${{ secrets.PASSWORD }}
+        run: python scripts/minerva/trier_sg.py
+
+      - name: process trier/sg file 
+        env:
+          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: python scripts/minerva/trier_sg.py 
+
+      #- name: download minerva/alegrete file 
         #env:
-          #username: ${{ secrets.USERNAME }}
-          #password: ${{ secrets.PASSWORD }}
-        #run: python scripts/minerva/trier_sg.py
+          #minerva_username: ${{ secrets.MINERVA_USERNAME }}
+          #minerva_password: ${{ secrets.MINERVA_PASSWORD }}
+        #run: python scripts/minerva/epays_alegrete.py
 
-      - name: download minerva/alegrete file 
-        env:
-          minerva_username: ${{ secrets.MINERVA_USERNAME }}
-          minerva_password: ${{ secrets.MINERVA_PASSWORD }}
-        run: python scripts/minerva/epays_alegrete.py
-
-      - name: download minerva/sg file 
-        env:
-          minerva_username: ${{ secrets.MINERVA_USERNAME }}
-          minerva_password: ${{ secrets.MINERVA_PASSWORD }}
-        run: python scripts/minerva/epays_sg.py
+      #- name: download minerva/sg file 
+        #env:
+          #minerva_username: ${{ secrets.MINERVA_USERNAME }}
+          #minerva_password: ${{ secrets.MINERVA_PASSWORD }}
+        #run: python scripts/minerva/epays_sg.py
