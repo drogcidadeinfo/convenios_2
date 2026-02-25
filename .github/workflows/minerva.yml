@@ -37,7 +37,7 @@ jobs:
         env:
           username: ${{ secrets.USERNAME }}
           password: ${{ secrets.PASSWORD }}
-        run: python scripts/minerva/trier_sg.py
+        run: python scripts/minerva/proc_trier_sg.py
 
       - name: process trier/sg file 
         env:
