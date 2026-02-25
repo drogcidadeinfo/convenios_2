@@ -123,7 +123,8 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
         df["CPF"] = pd.NA
 
     # Valor: try to convert pt-BR "269,09" to float
-    valor_col = "Unnamed: 18"  # in your screenshot this looks like value
+    valor_col = "Unnamed: 18"
+
     if valor_col in df.columns:
         df["Valor"] = (
             df[valor_col]
@@ -131,7 +132,17 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
             .str.replace(".", "", regex=False)
             .str.replace(",", ".", regex=False)
         )
+    
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
+    
+        # Divide by 100 (values are in cents)
+        df["Valor"] = df["Valor"] / 100
+    
+        # Format as Brazilian currency style (string)
+        df["Valor"] = df["Valor"].map(
+            lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            if pd.notna(x) else ""
+        )
     else:
         df["Valor"] = pd.NA
 
