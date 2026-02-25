@@ -126,23 +126,30 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
     valor_col = "Unnamed: 18"
 
     if valor_col in df.columns:
-        df["Valor"] = (
-            df[valor_col]
-            .astype(str)
+    
+        raw = df[valor_col].astype(str).str.strip()
+    
+        # Detect if original string had comma (Brazilian decimal)
+        has_comma = raw.str.contains(",", regex=False)
+    
+        # Remove thousand separators and normalize
+        normalized = (
+            raw
             .str.replace(".", "", regex=False)
             .str.replace(",", ".", regex=False)
         )
     
-        df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
+        df["Valor"] = pd.to_numeric(normalized, errors="coerce")
     
-        # Divide by 100 (values are in cents)
-        df["Valor"] = df["Valor"] / 100
+        # 🔥 Only divide by 100 if original value did NOT contain comma
+        df.loc[~has_comma, "Valor"] = df.loc[~has_comma, "Valor"] / 100
     
-        # Format as Brazilian currency style (string)
+        # Format as Brazilian style string
         df["Valor"] = df["Valor"].map(
             lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             if pd.notna(x) else ""
         )
+    
     else:
         df["Valor"] = pd.NA
 
