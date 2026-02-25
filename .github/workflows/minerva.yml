@@ -62,3 +62,10 @@ jobs:
           GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: python scripts/minerva/proc_minerva_sg.py 
+
+      - name: Upload data to spreadsheet
+        env:
+          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: |
+          python scripts/comb_trier_minerva_sg.py
