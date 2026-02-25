@@ -126,30 +126,39 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
     valor_col = "Unnamed: 18"
 
     if valor_col in df.columns:
-    
         raw = df[valor_col].astype(str).str.strip()
     
-        # Detect if original string had comma (Brazilian decimal)
-        has_comma = raw.str.contains(",", regex=False)
+        # Detect if original text had comma decimal (pt-BR)
+        has_comma = raw.str.contains(",", regex=False, na=False)
     
-        # Remove thousand separators and normalize
+        # Normalize to something numeric
         normalized = (
             raw
+            .str.replace("R$", "", regex=False)
+            .str.replace(" ", "", regex=False)
             .str.replace(".", "", regex=False)
             .str.replace(",", ".", regex=False)
         )
     
-        df["Valor"] = pd.to_numeric(normalized, errors="coerce")
+        val = pd.to_numeric(normalized, errors="coerce").astype("float64")
     
-        # 🔥 Only divide by 100 if original value did NOT contain comma
-        df.loc[~has_comma, "Valor"] = df.loc[~has_comma, "Valor"] / 100
+        # Heuristic:
+        # - if had comma -> already reais decimal
+        # - if no comma:
+        #     * 1-3 digits => reais (207 -> 207.00)
+        #     * 4+ digits  => centavos (26909 -> 269.09)
+        digits_len = raw.str.replace(r"\D", "", regex=True).str.len()
+        is_centavos = (~has_comma) & (digits_len >= 4)
     
-        # Format as Brazilian style string
+        val = np.where(is_centavos, val / 100.0, val)
+    
+        df["Valor"] = pd.Series(val, index=df.index)
+    
+        # Format as Brazilian style string for output
         df["Valor"] = df["Valor"].map(
             lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             if pd.notna(x) else ""
         )
-    
     else:
         df["Valor"] = pd.NA
 
