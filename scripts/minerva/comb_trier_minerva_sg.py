@@ -50,19 +50,48 @@ def name_tokens(name: str) -> set:
 def parse_brl_money(x):
     if x is None:
         return None
-    if isinstance(x, (int, float)):
+
+    # If already numeric (from Sheets), usually already reais
+    if isinstance(x, (int, float)) and not pd.isna(x):
         return float(x)
+
     s = str(x).strip()
     if s == "" or s == "-":
         return None
-    # remove "R$", espaços e etc
+
     s = s.replace("R$", "").replace(" ", "")
-    # milhar '.' e decimal ','
-    s = s.replace(".", "").replace(",", ".")
+
+    # pt-BR decimal uses comma
+    if "," in s:
+        s2 = s.replace(".", "").replace(",", ".")
+        try:
+            return float(s2)
+        except ValueError:
+            return None
+
+    # If it's a plain dot-decimal number like "207.0" or "207.28", treat as reais
+    if re.fullmatch(r"\d+(\.\d+)?", s):
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
+    # Otherwise: keep only digits
+    digits = re.sub(r"\D", "", s)
+    if digits == "":
+        return None
+
     try:
-        return float(s)
+        n = float(digits)
     except ValueError:
         return None
+
+    # Heuristic:
+    # 1-3 digits => reais (207 -> 207.00)
+    # 4+ digits  => centavos (20610 -> 206.10)
+    if len(digits) <= 3:
+        return n
+    return n / 100.0
 
 def format_brl(v):
     if v is None or pd.isna(v):
