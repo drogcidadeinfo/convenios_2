@@ -185,7 +185,7 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
             b_val = float(b.at[best_j, "Valor_num"])
             diff = abs(a_val - b_val)
 
-            status = "✅ OK" if diff <= VALUE_TOL else "⚠️ VALOR"
+            status = "✅ OK" if diff <= VALUE_TOL else "⚠️ VALOR DIVERGENTE"
 
             filial_out = a.at[i, "filial"]
             if pd.isna(filial_out):
@@ -212,7 +212,7 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
                 "trier_val": a_val,
                 "minerva_nome": "-",
                 "minerva_val": None,
-                "status_calc": "⚠️ SÓ A",
+                "status_calc": "⚠️ SOMENTE TRIER",
             })
 
     for j in range(len(b)):
@@ -232,7 +232,7 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
             "trier_val": None,
             "minerva_nome": str(b.at[j, "cliente"]),
             "minerva_val": b_val,
-            "status_calc": "⚠️ SÓ B",
+            "status_calc": "⚠️ SOMENTE MINERVA",
         })
 
     def sort_key(d):
