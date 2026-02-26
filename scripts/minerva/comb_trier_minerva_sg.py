@@ -13,7 +13,11 @@ SHEET_TRIER = "dados_trier_sg"
 SHEET_MINERVA = "dados_minerva_sg"
 SHEET_OUT = "TRIERxMINERVA_SG"
 
-HEADER = ["Filial", "CPF", "TRIER", "Valor", "MINERVA", "Valor", "STATUS"]
+# NEW: add "Anotações"
+HEADER = ["Filial", "CPF", "TRIER", "Valor", "MINERVA", "Valor", "STATUS", "Anotações"]
+
+# Dropdown options (edit if you want)
+STATUS_OPTIONS = ["✅ OK", "⚠️ VALOR", "⚠️ SÓ A", "⚠️ SÓ B"]
 
 # tolerância de diferença de valor (para arredondamentos)
 VALUE_TOL = 0.05
@@ -27,7 +31,6 @@ def strip_accents(s: str) -> str:
     return "".join(ch for ch in s if not unicodedata.combining(ch))
 
 def normalize_colname(x: str) -> str:
-    # remove NBSP, normaliza espaços, remove acentos, lowercase
     s = str(x).replace("\xa0", " ").strip()
     s = strip_accents(s)
     s = re.sub(r"\s+", " ", s).strip().lower()
@@ -38,20 +41,10 @@ def normalize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [normalize_colname(c) for c in df.columns]
     return df
 
-def name_tokens(name: str) -> set:
-    if name is None:
-        return set()
-    s = strip_accents(str(name)).upper()
-    s = re.sub(r"[^A-Z0-9\s]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    toks = [t for t in s.split(" ") if len(t) >= 2]
-    return set(toks)
-
 def parse_brl_money(x):
     if x is None:
         return None
 
-    # If already numeric (from Sheets), usually already reais
     if isinstance(x, (int, float)) and not pd.isna(x):
         return float(x)
 
@@ -61,7 +54,6 @@ def parse_brl_money(x):
 
     s = s.replace("R$", "").replace(" ", "")
 
-    # pt-BR decimal uses comma
     if "," in s:
         s2 = s.replace(".", "").replace(",", ".")
         try:
@@ -69,14 +61,12 @@ def parse_brl_money(x):
         except ValueError:
             return None
 
-    # If it's a plain dot-decimal number like "207.0" or "207.28", treat as reais
     if re.fullmatch(r"\d+(\.\d+)?", s):
         try:
             return float(s)
         except ValueError:
             return None
 
-    # Otherwise: keep only digits
     digits = re.sub(r"\D", "", s)
     if digits == "":
         return None
@@ -86,9 +76,6 @@ def parse_brl_money(x):
     except ValueError:
         return None
 
-    # Heuristic:
-    # 1-3 digits => reais (207 -> 207.00)
-    # 4+ digits  => centavos (20610 -> 206.10)
     if len(digits) <= 3:
         return n
     return n / 100.0
@@ -96,26 +83,9 @@ def parse_brl_money(x):
 def format_brl(v):
     if v is None or pd.isna(v):
         return "-"
-    # formata 1234.5 -> "R$ 1.234,50"
     s = f"{float(v):,.2f}"
     s = s.replace(",", "X").replace(".", ",").replace("X", ".")
     return f"R$ {s}"
-
-def parse_date_br(x):
-    # tenta dd/mm/yyyy
-    if x is None or str(x).strip() == "":
-        return None
-    if isinstance(x, (datetime, pd.Timestamp)):
-        return pd.to_datetime(x).date()
-    s = str(x).strip()
-    d = pd.to_datetime(s, dayfirst=True, errors="coerce")
-    return None if pd.isna(d) else d.date()
-
-def token_match_score(tokens_a: set, tokens_b: set) -> int:
-    # score simples: quantas palavras em comum
-    if not tokens_a or not tokens_b:
-        return 0
-    return len(tokens_a.intersection(tokens_b))
 
 def normalize_cpf(x):
     if x is None:
@@ -131,21 +101,45 @@ def format_cpf(cpf_digits: str) -> str:
         return "-"
     return re.sub(r"(\d{3})(\d{3})(\d{3})(\d{2})", r"\1.\2.\3-\4", cpf_digits)
 
+def _norm_name_for_key(s: str) -> str:
+    if s is None:
+        return ""
+    s = strip_accents(str(s)).upper()
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+def build_row_key(cpf_digits: str, trier_nome: str, trier_val, minerva_nome: str, minerva_val) -> str:
+    """
+    Key stable enough to match the same record between runs,
+    while still distinguishing same-CPF multiple rows.
+    """
+    cpf_digits = normalize_cpf(cpf_digits) or ""
+    t_nome = _norm_name_for_key(trier_nome)
+    m_nome = _norm_name_for_key(minerva_nome)
+    t_val = parse_brl_money(trier_val)
+    m_val = parse_brl_money(minerva_val)
+    t_val = "" if t_val is None else f"{t_val:.2f}"
+    m_val = "" if m_val is None else f"{m_val:.2f}"
+    return f"{cpf_digits}|{t_nome}|{t_val}|{m_nome}|{m_val}"
+
+
 # ----------------------------
 # Core: build output rows
 # ----------------------------
-def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[list]:
+def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[dict]:
+    """
+    Returns list of dicts:
+      {filial_out, cpf_digits, trier_nome, trier_val_num, minerva_nome, minerva_val_num, status_calc}
+    """
     a = normalize_df_columns(df_a)
     b = normalize_df_columns(df_b)
 
-    # required columns
     for col in ["cliente", "cpf", "valor"]:
         if col not in a.columns:
             raise ValueError(f"Coluna '{col}' não encontrada em {SHEET_TRIER}. Achei: {list(a.columns)}")
         if col not in b.columns:
             raise ValueError(f"Coluna '{col}' não encontrada em {SHEET_MINERVA}. Achei: {list(b.columns)}")
 
-    # Filial optional in each
     if "filial" not in a.columns:
         a["filial"] = pd.NA
     if "filial" not in b.columns:
@@ -160,14 +154,12 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
     a["Valor_num"] = a["valor"].apply(parse_brl_money)
     b["Valor_num"] = b["valor"].apply(parse_brl_money)
 
-    # drop invalid rows
     a = a.dropna(subset=["cpf_norm", "Valor_num"])
     b = b.dropna(subset=["cpf_norm", "Valor_num"])
 
-    out_rows = []
+    out = []
     used_b = set()
 
-    # index B by CPF for speed
     b_by_cpf = {}
     for j in range(len(b)):
         cpf = b.at[j, "cpf_norm"]
@@ -196,36 +188,34 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
 
             status = "✅ OK" if diff <= VALUE_TOL else "⚠️ VALOR"
 
-            # Filial: prefer A if present, else B
             filial_out = a.at[i, "filial"]
             if pd.isna(filial_out):
                 filial_out = b.at[best_j, "filial"]
-            filial_out = "-" if pd.isna(filial_out) else int(filial_out)
+            filial_out = None if pd.isna(filial_out) else int(filial_out)
 
-            out_rows.append([
-                filial_out,
-                format_cpf(cpf),
-                str(a.at[i, "cliente"]),
-                format_brl(a_val),
-                str(b.at[best_j, "cliente"]),
-                format_brl(b_val),
-                status
-            ])
+            out.append({
+                "filial": filial_out,
+                "cpf_digits": cpf,
+                "trier_nome": str(a.at[i, "cliente"]),
+                "trier_val": a_val,
+                "minerva_nome": str(b.at[best_j, "cliente"]),
+                "minerva_val": b_val,
+                "status_calc": status,
+            })
         else:
             filial_out = a.at[i, "filial"]
-            filial_out = "-" if pd.isna(filial_out) else int(filial_out)
+            filial_out = None if pd.isna(filial_out) else int(filial_out)
 
-            out_rows.append([
-                filial_out,
-                format_cpf(cpf),
-                str(a.at[i, "cliente"]),
-                format_brl(a_val),
-                "-",
-                "-",
-                "⚠️ SÓ A"
-            ])
+            out.append({
+                "filial": filial_out,
+                "cpf_digits": cpf,
+                "trier_nome": str(a.at[i, "cliente"]),
+                "trier_val": a_val,
+                "minerva_nome": "-",
+                "minerva_val": None,
+                "status_calc": "⚠️ SÓ A",
+            })
 
-    # leftover B rows
     for j in range(len(b)):
         if j in used_b:
             continue
@@ -234,24 +224,24 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
         b_val = float(b.at[j, "Valor_num"])
 
         filial_out = b.at[j, "filial"]
-        filial_out = "-" if pd.isna(filial_out) else int(filial_out)
+        filial_out = None if pd.isna(filial_out) else int(filial_out)
 
-        out_rows.append([
-            filial_out,
-            format_cpf(cpf),
-            "-",
-            "-",
-            str(b.at[j, "cliente"]),
-            format_brl(b_val),
-            "⚠️ SÓ B"
-        ])
+        out.append({
+            "filial": filial_out,
+            "cpf_digits": cpf,
+            "trier_nome": "-",
+            "trier_val": None,
+            "minerva_nome": str(b.at[j, "cliente"]),
+            "minerva_val": b_val,
+            "status_calc": "⚠️ SÓ B",
+        })
 
-    # sort by CPF then status
-    def sort_key(r):
-        return (r[1], r[6], r[2], r[4])
+    def sort_key(d):
+        return (format_cpf(d["cpf_digits"]), d["status_calc"], d["trier_nome"], d["minerva_nome"])
 
-    out_rows.sort(key=sort_key)
-    return out_rows
+    out.sort(key=sort_key)
+    return out
+
 
 # ----------------------------
 # Google Sheets I/O
@@ -263,13 +253,82 @@ def upsert_worksheet(sh, title: str, rows: int = 2000, cols: int = 10):
         ws = sh.add_worksheet(title=title, rows=rows, cols=cols)
     return ws
 
+def ensure_sheet_size(ws, min_rows: int, min_cols: int):
+    if ws.row_count < min_rows:
+        ws.resize(rows=min_rows)
+    if ws.col_count < min_cols:
+        ws.resize(cols=min_cols)
+
+def read_existing_overrides(ws_out) -> dict:
+    """
+    Reads existing rows and returns:
+      key -> (status_user, anotacoes_user)
+    """
+    values = ws_out.get_all_values()
+    if not values:
+        return {}
+
+    hdr = values[0]
+    # Accept both old header (7 cols) and new (8 cols)
+    # Expected positions:
+    # 0 Filial, 1 CPF, 2 TRIER, 3 Valor, 4 MINERVA, 5 Valor, 6 STATUS, 7 Anotações
+    overrides = {}
+    for row in values[1:]:
+        row = row + [""] * (8 - len(row))  # pad
+        cpf_digits = normalize_cpf(row[1])
+        key = build_row_key(
+            cpf_digits,
+            row[2],
+            row[3],
+            row[4],
+            row[5],
+        )
+        status_user = (row[6] or "").strip()
+        anot = (row[7] or "").strip()
+        # Only store if there is something meaningful (but storing blank is fine too)
+        overrides[key] = (status_user, anot)
+    return overrides
+
 def write_values_chunked(ws, values, start_cell="A1", chunk_size=500):
-    # values is list of lists
     for i in range(0, len(values), chunk_size):
         chunk = values[i:i + chunk_size]
-        start_row = 1 + i  # 1-indexed
+        start_row = 1 + i
         cell = f"A{start_row}"
         ws.update(cell, chunk, value_input_option="RAW")
+
+def clear_leftover_rows(ws, start_row: int, end_row: int, end_col_letter: str):
+    """
+    Clears A{start_row}:{end_col}{end_row}
+    """
+    if end_row >= start_row:
+        ws.batch_clear([f"A{start_row}:{end_col_letter}{end_row}"])
+
+def apply_status_dropdown(sh, ws, start_row: int, end_row: int):
+    """
+    Applies data validation to STATUS column (G) from start_row..end_row
+    """
+    # column G => index 6 (0-based)
+    sheet_id = ws.id
+    requests = [{
+        "setDataValidation": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": start_row - 1,   # 0-based, inclusive
+                "endRowIndex": end_row,           # 0-based, exclusive
+                "startColumnIndex": 6,            # G
+                "endColumnIndex": 7
+            },
+            "rule": {
+                "condition": {
+                    "type": "ONE_OF_LIST",
+                    "values": [{"userEnteredValue": s} for s in STATUS_OPTIONS]
+                },
+                "showCustomUi": True,
+                "strict": True
+            }
+        }
+    }]
+    sh.batch_update({"requests": requests})
 
 def main():
     if not SPREADSHEET_ID:
@@ -290,13 +349,58 @@ def main():
     df_t = pd.DataFrame(ws_t.get_all_records())
     df_m = pd.DataFrame(ws_m.get_all_records())
 
-    rows_cpf = build_conferencia_cpf_valor(df_t, df_m)
+    items = build_conferencia_cpf_valor(df_t, df_m)
 
-    ws_out = upsert_worksheet(sh, SHEET_OUT, rows=max(2000, len(rows_cpf) + 5), cols=10)
-    ws_out.clear()
+    ws_out = upsert_worksheet(sh, SHEET_OUT, rows=max(2000, len(items) + 5), cols=10)
+    ensure_sheet_size(ws_out, min_rows=max(2000, len(items) + 5), min_cols=8)
 
-    values = [HEADER] + rows_cpf
-    write_values_chunked(ws_out, values)
+    # NEW: load existing STATUS/Anotações so we don't overwrite user edits
+    overrides = read_existing_overrides(ws_out)
+
+    rows = []
+    for d in items:
+        filial_out = "-" if d["filial"] is None else d["filial"]
+
+        cpf_digits = d["cpf_digits"]
+        trier_nome = d["trier_nome"]
+        minerva_nome = d["minerva_nome"]
+
+        trier_val_fmt = format_brl(d["trier_val"])
+        minerva_val_fmt = format_brl(d["minerva_val"]) if d["minerva_val"] is not None else "-"
+
+        key = build_row_key(cpf_digits, trier_nome, trier_val_fmt, minerva_nome, minerva_val_fmt)
+
+        status_calc = d["status_calc"]
+        status_user, anot_user = overrides.get(key, ("", ""))
+
+        # If user already changed status, keep it; else use calculated
+        status_final = status_user if status_user else status_calc
+
+        rows.append([
+            filial_out,
+            format_cpf(cpf_digits),
+            trier_nome,
+            trier_val_fmt,
+            minerva_nome,
+            minerva_val_fmt,
+            status_final,
+            anot_user  # preserve notes
+        ])
+
+    values = [HEADER] + rows
+
+    # Write new table (without wiping the entire sheet)
+    write_values_chunked(ws_out, values, chunk_size=500)
+
+    # Clear leftovers (if previous run had more rows)
+    prev_len = len(ws_out.get_all_values())
+    new_len = len(values)
+    if prev_len > new_len:
+        clear_leftover_rows(ws_out, start_row=new_len + 1, end_row=prev_len, end_col_letter="H")
+
+    # Apply dropdown to STATUS column for the rows we wrote
+    if len(values) >= 2:
+        apply_status_dropdown(sh, ws_out, start_row=2, end_row=len(values))
 
 if __name__ == "__main__":
     main()
