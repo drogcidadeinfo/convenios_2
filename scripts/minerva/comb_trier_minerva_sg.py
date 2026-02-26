@@ -17,7 +17,7 @@ SHEET_OUT = "TRIERxMINERVA_SG"
 HEADER = ["Filial", "CPF", "TRIER", "Valor", "MINERVA", "Valor", "STATUS", "Anotações"]
 
 # Dropdown options (edit if you want)
-STATUS_OPTIONS = ["✅ OK", "⚠️ VALOR", "⚠️ SÓ A", "⚠️ SÓ B"]
+STATUS_OPTIONS = ["✅ OK", "⚠️ VALOR DIVERGENTE", "⚠️ SOMENTE TRIER", "⚠️ SOMENTE MINERVA"]
 
 # tolerância de diferença de valor (para arredondamentos)
 VALUE_TOL = 0.05
@@ -121,7 +121,6 @@ def build_row_key(cpf_digits: str, trier_nome: str, trier_val, minerva_nome: str
     t_val = "" if t_val is None else f"{t_val:.2f}"
     m_val = "" if m_val is None else f"{m_val:.2f}"
     return f"{cpf_digits}|{t_nome}|{t_val}|{m_nome}|{m_val}"
-
 
 # ----------------------------
 # Core: build output rows
@@ -241,7 +240,6 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
 
     out.sort(key=sort_key)
     return out
-
 
 # ----------------------------
 # Google Sheets I/O
