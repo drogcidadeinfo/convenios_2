@@ -92,8 +92,7 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
         df.columns[1]: 'Valor',
         df.columns[2]: 'CPF',
     })
-
-    value_col  = "Valor"  
+    
     cpf_col    = "CPF" 
 
     # CPF: force digits + zfill + format
@@ -109,7 +108,8 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
         df["CPF"] = pd.NA
 
     # Valor: try to convert pt-BR "269,09" to float
-
+    valor_col  = "Valor" 
+    
     if valor_col in df.columns:
         raw = df[valor_col].astype(str).str.strip()
     
