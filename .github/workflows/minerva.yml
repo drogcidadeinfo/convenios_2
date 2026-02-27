@@ -51,17 +51,17 @@ jobs:
           #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         #run: python scripts/minerva/proc_trier_sg.py 
 
-      - name: download minerva/alegrete file 
-        env:
-          minerva_username: ${{ secrets.MINERVA_USERNAME }}
-          minerva_password: ${{ secrets.MINERVA_PASSWORD }}
-        run: python scripts/minerva/epays_alegrete.py
+      #- name: download minerva/alegrete file 
+        #env:
+          #minerva_username: ${{ secrets.MINERVA_USERNAME }}
+          #minerva_password: ${{ secrets.MINERVA_PASSWORD }}
+        #run: python scripts/minerva/epays_alegrete.py
 
-      - name: process minerva/alegrete file 
-        env:
-          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python scripts/minerva/proc_minerva_alegrete.py 
+      #- name: process minerva/alegrete file 
+        #env:
+          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        #run: python scripts/minerva/proc_minerva_alegrete.py 
 
       #- name: download minerva/sg file 
         #env:
@@ -81,3 +81,10 @@ jobs:
           #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         #run: |
           #python scripts/minerva/comb_trier_minerva_sg.py
+
+      - name: Upload data to spreadsheet
+        env:
+          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: |
+          python scripts/minerva/comb_trier_minerva_alegrete.py
