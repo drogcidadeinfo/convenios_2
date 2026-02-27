@@ -13,7 +13,8 @@ SHEET_TRIER = "dados_trier"
 SHEET_CREDCOM = "dados_cred_commerce"
 SHEET_OUT = "TRIERxCREDCOM"
 
-HEADER = ["Filial", "Data Emissão", "TRIER", "Valor", "CREDCOM", "Valor", "STATUS"]
+# Updated header with Anotações
+HEADER = ["Filial", "Data Emissão", "TRIER", "Valor", "CREDCOM", "Valor", "STATUS", "Anotações"]
 
 # tolerância de diferença de valor (para arredondamentos)
 VALUE_TOL = 0.05
@@ -128,6 +129,13 @@ def parse_parcela_credcom(x):
     n = int(m.group(0))
     return (n, f"PARCELA {n}")
 
+def build_row_key(filial, data_emissao, trier_nome, credcom_nome) -> str:
+    """Build a unique key for a row to preserve annotations"""
+    filial_str = "" if filial is None or pd.isna(filial) else str(int(filial))
+    data_str = data_emissao.strftime("%Y%m%d") if isinstance(data_emissao, (datetime, pd.Timestamp)) else str(data_emissao)
+    # Use combination of fields to create a stable key
+    return f"{filial_str}|{data_str}|{trier_nome}|{credcom_nome}"
+
 # ----------------------------
 # Core: build output rows
 # ----------------------------
@@ -234,15 +242,17 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
                 else:
                     status = "⚠️ VALOR DIVERGENTE"
 
-                out_rows.append([
-                    filial,
-                    dt.strftime("%d/%m/%Y"),
-                    t_name,
-                    format_brl(t_val),
-                    c_name,
-                    format_brl(c_val),
-                    status
-                ])
+                out_rows.append({
+                    "filial": filial,
+                    "data": dt,
+                    "data_str": dt.strftime("%d/%m/%Y"),
+                    "trier_nome": t_name,
+                    "trier_val": t_val,
+                    "credcom_nome": c_name,
+                    "credcom_val": c_val,
+                    "status": status,
+                    "row_type": "matched"
+                })
             else:
                 # sem match no CREDCOM
                 t_parc = tg.at[i, "parcela_txt"]
@@ -251,15 +261,17 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
                     t_name = f"{t_name} — {t_parc}"
 
                 t_val = tg.at[i, "Valor_num"]
-                out_rows.append([
-                    filial,
-                    dt.strftime("%d/%m/%Y"),
-                    t_name,
-                    format_brl(t_val),
-                    "-",
-                    "-",
-                    "⚠️ SOMENTE TRIER"
-                ])
+                out_rows.append({
+                    "filial": filial,
+                    "data": dt,
+                    "data_str": dt.strftime("%d/%m/%Y"),
+                    "trier_nome": t_name,
+                    "trier_val": t_val,
+                    "credcom_nome": "-",
+                    "credcom_val": None,
+                    "status": "⚠️ SOMENTE TRIER",
+                    "row_type": "trier_only"
+                })
 
         # sobrou CREDCOM sem par
         for j in range(len(cg)):
@@ -272,23 +284,18 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
                 c_name = f"{c_name} — {c_parc}"
 
             c_val = cg.at[j, "Valor_num"]
-            out_rows.append([
-                filial,
-                dt.strftime("%d/%m/%Y"),
-                "-",
-                "-",
-                c_name,
-                format_brl(c_val),
-                "⚠️ SOMENTE CREDCOM"
-            ])
+            out_rows.append({
+                "filial": filial,
+                "data": dt,
+                "data_str": dt.strftime("%d/%m/%Y"),
+                "trier_nome": "-",
+                "trier_val": None,
+                "credcom_nome": c_name,
+                "credcom_val": c_val,
+                "status": "⚠️ SOMENTE CREDCOM",
+                "row_type": "credcom_only"
+            })
 
-    # ordena para ficar bem “conferência”
-    def sort_key(r):
-        d = pd.to_datetime(r[1], dayfirst=True, errors="coerce")
-        f = int(r[0]) if r[0] != "-" else 9999
-        return (d, f, str(r[2]), str(r[4]))
-
-    out_rows.sort(key=sort_key)
     return out_rows
 
 # ----------------------------
@@ -301,13 +308,59 @@ def upsert_worksheet(sh, title: str, rows: int = 2000, cols: int = 10):
         ws = sh.add_worksheet(title=title, rows=rows, cols=cols)
     return ws
 
+def ensure_sheet_size(ws, min_rows: int, min_cols: int):
+    if ws.row_count < min_rows:
+        ws.resize(rows=min_rows)
+    if ws.col_count < min_cols:
+        ws.resize(cols=min_cols)
+
+def read_existing_annotations(ws_out) -> dict:
+    """
+    Read the Anotações column and key by a combination of fields to preserve notes
+    """
+    values = ws_out.get_all_values()
+    if not values:
+        return {}
+
+    annotations = {}
+    for row in values[1:]:  # Skip header
+        row = row + [""] * (8 - len(row))  # Pad to 8 columns
+
+        filial_raw = (row[0] or "").strip()
+        try:
+            filial = int(filial_raw) if filial_raw not in ("", "-") else None
+        except ValueError:
+            filial = None
+            
+        data = row[1] if len(row) > 1 else ""
+        trier_nome = row[2] if len(row) > 2 else ""
+        credcom_nome = row[4] if len(row) > 4 else ""
+
+        # Create a key from the identifying fields
+        filial_str = "" if filial is None else str(filial)
+        key = f"{filial_str}|{data}|{trier_nome}|{credcom_nome}"
+
+        # Get annotation from column H (index 7)
+        anot = (row[7] or "").strip()
+        
+        if anot:
+            annotations[key] = anot
+
+    return annotations
+
 def write_values_chunked(ws, values, start_cell="A1", chunk_size=500):
-    # values is list of lists
     for i in range(0, len(values), chunk_size):
         chunk = values[i:i + chunk_size]
-        start_row = 1 + i  # 1-indexed
+        start_row = 1 + i
         cell = f"A{start_row}"
         ws.update(cell, chunk, value_input_option="RAW")
+
+def clear_leftover_rows(ws, start_row: int, end_row: int, end_col_letter: str):
+    """
+    Clears A{start_row}:{end_col}{end_row}
+    """
+    if end_row >= start_row:
+        ws.batch_clear([f"A{start_row}:{end_col_letter}{end_row}"])
 
 def main():
     if not SPREADSHEET_ID:
@@ -328,13 +381,78 @@ def main():
     df_trier = pd.DataFrame(ws_t.get_all_records())
     df_cred = pd.DataFrame(ws_c.get_all_records())
 
-    rows = build_conferencia_rows(df_trier, df_cred)
+    items = build_conferencia_rows(df_trier, df_cred)
 
-    ws_out = upsert_worksheet(sh, SHEET_OUT, rows=max(2000, len(rows) + 5), cols=10)
-    ws_out.clear()
+    ws_out = upsert_worksheet(sh, SHEET_OUT, rows=max(2000, len(items) + 5), cols=10)
+    ensure_sheet_size(ws_out, min_rows=max(2000, len(items) + 5), min_cols=8)  # Updated to 8 columns
 
+    # Read existing annotations
+    annotations = read_existing_annotations(ws_out)
+
+    rows = []
+    for d in items:
+        # Create key for this row
+        filial = d["filial"]
+        data_str = d["data_str"]
+        trier_nome = d["trier_nome"]
+        credcom_nome = d["credcom_nome"]
+        
+        filial_str = "" if filial is None else str(filial)
+        key = f"{filial_str}|{data_str}|{trier_nome}|{credcom_nome}"
+        
+        # Get annotation if exists
+        anot = annotations.get(key, "")
+
+        trier_val_fmt = format_brl(d["trier_val"])
+        credcom_val_fmt = format_brl(d["credcom_val"]) if d["credcom_val"] is not None else "-"
+
+        rows.append([
+            filial if filial is not None else "-",
+            data_str,
+            trier_nome,
+            trier_val_fmt,
+            credcom_nome,
+            credcom_val_fmt,
+            d["status"],
+            anot  # Preserve annotation
+        ])
+
+    # Sort rows for consistent display
+    def sort_key(r):
+        d = pd.to_datetime(r[1], dayfirst=True, errors="coerce")
+        f = int(r[0]) if r[0] != "-" else 9999
+        return (d, f, str(r[2]), str(r[4]))
+
+    rows.sort(key=sort_key)
     values = [HEADER] + rows
-    write_values_chunked(ws_out, values)
+
+    # Write new table
+    write_values_chunked(ws_out, values, chunk_size=500)
+
+    # Clear leftovers (if previous run had more rows)
+    prev_len = len(ws_out.get_all_values())
+    new_len = len(values)
+    if prev_len > new_len:
+        clear_leftover_rows(ws_out, start_row=new_len + 1, end_row=prev_len, end_col_letter="H")  # Updated to H
+
+    # Remove any existing data validation from STATUS column
+    try:
+        ws_out.clear_basic_filter()
+        requests = [{
+            "setDataValidation": {
+                "range": {
+                    "sheetId": ws_out.id,
+                    "startRowIndex": 0,
+                    "endRowIndex": ws_out.row_count,
+                    "startColumnIndex": 6,  # Column G (STATUS)
+                    "endColumnIndex": 7
+                },
+                "rule": None
+            }
+        }]
+        sh.batch_update({"requests": requests})
+    except Exception as e:
+        print(f"Note: Could not remove data validation: {e}")
 
 if __name__ == "__main__":
     main()
