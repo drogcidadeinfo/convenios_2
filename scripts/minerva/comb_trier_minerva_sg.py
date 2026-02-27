@@ -16,9 +16,6 @@ SHEET_OUT = "TRIERxMINERVA_SG"
 # NEW: add "Anotações"
 HEADER = ["Filial", "CPF", "TRIER", "Valor", "MINERVA", "Valor", "STATUS", "Anotações"]
 
-# Dropdown options (edit if you want)
-STATUS_OPTIONS = ["✅ OK", "⚠️ VALOR DIVERGENTE", "⚠️ SOMENTE TRIER", "⚠️ SOMENTE MINERVA"]
-
 # tolerância de diferença de valor (para arredondamentos)
 VALUE_TOL = 0.05
 
@@ -269,35 +266,32 @@ def ensure_sheet_size(ws, min_rows: int, min_cols: int):
     if ws.col_count < min_cols:
         ws.resize(cols=min_cols)
 
-def read_existing_overrides(ws_out) -> dict:
+def read_existing_annotations(ws_out) -> dict:
+    """
+    Read only the Anotações column, keyed by CPF only (not by filial)
+    """
     values = ws_out.get_all_values()
     if not values:
         return {}
 
-    overrides = {}
-    for row in values[1:]:
+    annotations = {}
+    for row in values[1:]:  # Skip header
         row = row + [""] * (8 - len(row))
 
-        filial_raw = (row[0] or "").strip()
-        try:
-            filial = int(filial_raw) if filial_raw not in ("", "-") else None
-        except ValueError:
-            filial = None
-
         cpf_digits = normalize_cpf(row[1])
+        if not cpf_digits:
+            continue
 
-        trier_nome = row[2]
-        trier_val = row[3]
-        minerva_nome = row[4]
-        minerva_val = row[5]
-
-        key = build_row_key(filial, cpf_digits)
-
-        status_user = (row[6] or "").strip()
+        # Get annotation from column H (index 7)
         anot = (row[7] or "").strip()
-        overrides[key] = (status_user, anot)
+        
+        # Store by CPF only (if there are multiple annotations for same CPF, keep the first non-empty one)
+        if cpf_digits not in annotations and anot:
+            annotations[cpf_digits] = anot
+        elif anot and cpf_digits in annotations and not annotations[cpf_digits]:
+            annotations[cpf_digits] = anot
 
-    return overrides
+    return annotations
 
 def write_values_chunked(ws, values, start_cell="A1", chunk_size=500):
     for i in range(0, len(values), chunk_size):
@@ -312,33 +306,6 @@ def clear_leftover_rows(ws, start_row: int, end_row: int, end_col_letter: str):
     """
     if end_row >= start_row:
         ws.batch_clear([f"A{start_row}:{end_col_letter}{end_row}"])
-
-def apply_status_dropdown(sh, ws, start_row: int, end_row: int):
-    """
-    Applies data validation to STATUS column (G) from start_row..end_row
-    """
-    # column G => index 6 (0-based)
-    sheet_id = ws.id
-    requests = [{
-        "setDataValidation": {
-            "range": {
-                "sheetId": sheet_id,
-                "startRowIndex": start_row - 1,   # 0-based, inclusive
-                "endRowIndex": end_row,           # 0-based, exclusive
-                "startColumnIndex": 6,            # G
-                "endColumnIndex": 7
-            },
-            "rule": {
-                "condition": {
-                    "type": "ONE_OF_LIST",
-                    "values": [{"userEnteredValue": s} for s in STATUS_OPTIONS]
-                },
-                "showCustomUi": True,
-                "strict": False
-            }
-        }
-    }]
-    sh.batch_update({"requests": requests})
 
 def main():
     if not SPREADSHEET_ID:
@@ -364,8 +331,8 @@ def main():
     ws_out = upsert_worksheet(sh, SHEET_OUT, rows=max(2000, len(items) + 5), cols=10)
     ensure_sheet_size(ws_out, min_rows=max(2000, len(items) + 5), min_cols=8)
 
-    # NEW: load existing STATUS/Anotações so we don't overwrite user edits
-    overrides = read_existing_overrides(ws_out)
+    # Read only existing annotations (not status overrides)
+    annotations = read_existing_annotations(ws_out)
 
     rows = []
     for d in items:
@@ -378,13 +345,11 @@ def main():
         trier_val_fmt = format_brl(d["trier_val"])
         minerva_val_fmt = format_brl(d["minerva_val"]) if d["minerva_val"] is not None else "-"
 
-        key = build_row_key(d["filial"], cpf_digits)
+        # Get annotation by CPF only
+        anot = annotations.get(cpf_digits, "")
 
-        status_calc = d["status_calc"]
-        status_user, anot_user = overrides.get(key, ("", ""))
-
-        # If user already changed status, keep it; else use calculated
-        status_final = status_user if status_user else status_calc
+        # Always use calculated status (no user overrides)
+        status_final = d["status_calc"]
 
         rows.append([
             filial_out,
@@ -394,7 +359,7 @@ def main():
             minerva_nome,
             minerva_val_fmt,
             status_final,
-            anot_user  # preserve notes
+            anot  # preserve notes by CPF
         ])
 
     values = [HEADER] + rows
@@ -408,9 +373,25 @@ def main():
     if prev_len > new_len:
         clear_leftover_rows(ws_out, start_row=new_len + 1, end_row=prev_len, end_col_letter="H")
 
-    # Apply dropdown to STATUS column for the rows we wrote
-    if len(values) >= 2:
-        apply_status_dropdown(sh, ws_out, start_row=2, end_row=len(values))
+    # Remove any existing data validation (dropdown) from STATUS column
+    try:
+        # Clear data validation from column G (index 6)
+        ws_out.clear_basic_filter()
+        requests = [{
+            "setDataValidation": {
+                "range": {
+                    "sheetId": ws_out.id,
+                    "startRowIndex": 0,
+                    "endRowIndex": ws_out.row_count,
+                    "startColumnIndex": 6,
+                    "endColumnIndex": 7
+                },
+                "rule": None  # This removes the validation
+            }
+        }]
+        sh.batch_update({"requests": requests})
+    except Exception as e:
+        print(f"Note: Could not remove data validation: {e}")
 
 if __name__ == "__main__":
     main()
