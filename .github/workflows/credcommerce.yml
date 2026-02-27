@@ -23,6 +23,7 @@ jobs:
       - name: Run extraction for all cities
         env:
           CRED_COMM_ACC_JSON: ${{ secrets.CRED_COMM_ACC_JSON }}
+          CDL_ACC_JSON: ${{ secrets.CDL_ACC_JSON }}
           GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           WORKSHEET_NAME: dados_cred_commerce
