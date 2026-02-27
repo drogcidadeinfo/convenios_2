@@ -33,11 +33,11 @@ jobs:
           password: ${{ secrets.PASSWORD }}
         run: python scripts/sindsaude/trier.py
 
-      #- name: process trier/alegrete file 
-        #env:
-          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        #run: python scripts/minerva/proc_trier_alegrete.py 
+      - name: process trier file
+        env:
+          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: python scripts/sindsaude/proc_trier.py 
         
       #- name: download trier/sg file 
         #env:
@@ -82,9 +82,9 @@ jobs:
         #run: |
           #python scripts/minerva/comb_trier_minerva_sg.py
 
-      - name: Upload data to spreadsheet
-        env:
-          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: |
-          python scripts/minerva/comb_trier_minerva_alegrete.py
+      #- name: Upload data to spreadsheet
+        #env:
+          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        #run: |
+          #python scripts/minerva/comb_trier_minerva_alegrete.py
