@@ -46,7 +46,7 @@ def retry_api_call(func, retries=3, delay=2):
     raise Exception("Max retries reached.")
 
 
-def clean_transfer_file(file_path: str) -> pd.DataFrame:
+'''def clean_transfer_file(file_path: str) -> pd.DataFrame:
     """
     Load one .xls/.xlsx and produce:
     ['Filial', 'Cliente', 'CPF', 'Valor']
@@ -165,6 +165,134 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
             lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             if pd.notna(x) else ""
         )
+    else:
+        df["Valor"] = pd.NA
+
+    # Filial as Int64
+    df["Filial"] = pd.to_numeric(df["Filial"], errors="coerce").astype("Int64")
+
+    out = df[["Filial", "Cliente", "CPF", "Valor"]].dropna(subset=["Cliente"], how="all")
+
+    logging.info(f"  -> {os.path.basename(file_path)}: {len(out)} clean rows")
+    return out'''
+
+def clean_transfer_file(file_path: str) -> pd.DataFrame:
+    """
+    Load one .xls/.xlsx and produce:
+    ['Filial', 'Cliente', 'CPF', 'Valor']
+    """
+    logging.info(f"Reading: {os.path.basename(file_path)}")
+
+    # Read as-is; force CPF column to string later (name may vary), so keep default here
+    df = pd.read_excel(file_path, skiprows=9, header=0)
+
+    df = df.drop(columns=[
+        'Unnamed: 0', 'Vencto.', 'Unnamed: 3', 'Unnamed: 4',
+        'Atraso', 'Unnamed: 6', 'Unnamed: 8',
+        'Unnamed: 10', 'Unnamed: 11', 'Data    Recebe', 'Emissão',
+        'Unnamed: 14', 'Unnamed: 15', 'Unnamed: 16', 'Descrição',
+        'Unnamed: 19', 'Vlr. Rec. c/ ', 'Unnamed: 21', 'Unnamed: 22',
+        'Unnamed: 23', '  Vlr. Desc. ', 'Unnamed: 25', 'Unnamed: 26',
+        'Unnamed: 27', 'Unnamed: 28', 'Juros Rec.', 'Unnamed: 30',
+        'Unnamed: 31', 'Unnamed: 32', 'Multa Rec.', 'Unnamed: 34',
+        'Unnamed: 36', 'Unnamed: 37', 'Caixa', 'Unnamed: 39',
+        'Fil. Rec.', 'Unnamed: 41', 'Fil.', 'Unnamed: 43', 'Venda',
+        'Unnamed: 45', 'Unnamed: 46', 'Unnamed: 47', 'Cupom', 'Unnamed: 49',
+        'Unnamed: 50', 'Unnamed: 51', 'Unnamed: 52', 'Unnamed: 53',
+        'Dependente', 'Unnamed: 55', 'Unnamed: 56', 'Fatura'
+    ], errors="ignore")
+
+    df.dropna(how="all", inplace=True)
+    df = df.reset_index(drop=True)
+
+    # ---------- move Unnamed: 18 up 1 row (your code does -1) ----------
+    col = "Unnamed: 18"
+    if col in df.columns:
+        src = df[col].notna().values
+        src_idx = np.flatnonzero(src)
+        dst_idx = src_idx - 1  # up 1 row
+        valid = dst_idx >= 0
+        df.loc[dst_idx[valid], col] = df.loc[src_idx[valid], col].values
+        df.loc[src_idx[valid], col] = np.nan
+
+    df = df.drop(columns=["Unnamed: 7"], errors="ignore")
+    df.dropna(how="all", inplace=True)
+
+    marker_col = "Unnamed: 1"   # has Filial: / Cliente:
+    value_col  = "Unnamed: 12"  # has "F01 - MATRIZ - ..."
+    cpf_col    = "Unnamed: 35"  # CPF in your screenshot
+
+    # Build Filial number from Filial: rows, forward fill
+    m = df[marker_col].astype(str).str.strip()
+
+    filial_num = (
+        df[value_col]
+        .astype(str)
+        .str.extract(r"F0*(\d+)")[0]
+    )
+
+    df["Filial"] = np.where(m.eq("Filial:"), filial_num, np.nan)
+    df["Filial"] = df["Filial"].ffill()
+
+    # Keep only client rows
+    df = df[~m.eq("Filial:")].copy()
+
+    # Cliente name is in value_col for client rows
+    df["Cliente"] = df[value_col].astype(str).str.strip()
+
+    # CPF: force digits + zfill + format
+    if cpf_col in df.columns:
+        df["CPF"] = (
+            df[cpf_col]
+            .astype(str)
+            .str.replace(r"\D", "", regex=True)
+            .str.zfill(11)
+            .str.replace(r"(\d{3})(\d{3})(\d{3})(\d{2})", r"\1.\2.\3-\4", regex=True)
+        )
+    else:
+        df["CPF"] = pd.NA
+
+    # Valor: try to convert pt-BR "269,09" to float and KEEP AS FLOAT
+    valor_col = "Unnamed: 18"
+
+    if valor_col in df.columns:
+        raw = df[valor_col].astype(str).str.strip()
+    
+        has_comma = raw.str.contains(",", regex=False, na=False)
+    
+        # looks like plain number with dot decimal (e.g. "207.0", "28.0", "207.28")
+        is_dot_decimal = raw.str.match(r"^\d+(\.\d+)?$", na=False)
+    
+        # Parse values that are dot-decimals directly (do NOT remove dot)
+        val_dot = pd.to_numeric(raw.where(is_dot_decimal), errors="coerce").astype("float64")
+    
+        # For the rest (non dot-decimal), normalize pt-BR thousands/decimal
+        normalized = (
+            raw
+            .str.replace("R$", "", regex=False)
+            .str.replace(" ", "", regex=False)
+            .str.replace(".", "", regex=False)   # remove thousands separator
+            .str.replace(",", ".", regex=False)  # decimal comma -> dot
+        )
+        val_other = pd.to_numeric(normalized.where(~is_dot_decimal), errors="coerce").astype("float64")
+    
+        # Combine
+        val = val_dot.combine_first(val_other)
+    
+        # Centavos heuristic ONLY when:
+        # - no comma
+        # - not dot-decimal
+        # - digits length >= 4  (e.g. "26909" -> 269.09)
+        digits_len = raw.str.replace(r"\D", "", regex=True).str.len()
+        is_centavos = (~has_comma) & (~is_dot_decimal) & (digits_len >= 4)
+    
+        val = np.where(is_centavos, val / 100.0, val)
+    
+        # Store as float, NOT formatted string
+        df["Valor"] = pd.Series(val, index=df.index)
+        
+        # REMOVED: The formatting code that converts to string with R$
+        # The matching script expects numeric values
     else:
         df["Valor"] = pd.NA
 
