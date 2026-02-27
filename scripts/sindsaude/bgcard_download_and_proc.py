@@ -132,8 +132,52 @@ def gerar_relatorio(data_inicio, data_fim):
             wait.until(EC.element_to_be_clickable((By.XPATH, '//input[@type="password"]'))).send_keys(SENHA)
             wait.until(EC.element_to_be_clickable((By.XPATH, '//input[@type="submit"]'))).click()
 
-            # restante da lógica mantida igual...
-            # (mantive resumido aqui porque sua parte de scraping já está funcionando)
+            navegador.switch_to.window(navegador.window_handles[-1])
+
+            wait.until(EC.element_to_be_clickable((By.XPATH, '/html/body/table[2]/tbody/tr[1]/td/form/table[2]/tbody/tr/td[5]/a'))).click()
+
+            campo_data_inicio = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="f_date1"]')))
+            campo_data_inicio.send_keys(data_inicio)
+
+            campo_data_fim = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="f_date2"]')))
+            campo_data_fim.send_keys(data_fim)
+
+            wait.until(EC.element_to_be_clickable((By.XPATH, '/html/body/table[2]/tbody/tr[1]/td/form/table[3]/tbody/tr[3]/td[3]/input'))).click()
+
+            try:
+                table_xpath = '//*[@id="table3"]/tbody/tr[3]/td/div/center/table/tbody/tr/td/center/center/table/tbody/tr[2]/td/center/table/tbody/tr/td/center/table/tbody/tr[2]/td/table[1]/tbody/tr[3]/td/table'
+                table = navegador.find_element(By.XPATH, table_xpath)
+            except Exception as e:
+                logging.warning(f'Tabela não encontrada para filial {num_filial}: {e}')
+                continue
+
+            rows = table.find_elements(By.TAG_NAME, 'tr')
+            data = []
+
+            for i in range(len(rows)):
+                cols = table.find_elements(By.TAG_NAME, 'tr')[i].find_elements(By.TAG_NAME, 'td')
+                if len(cols) == 8:
+                    try:
+                        cliente_completo = cols[2].text
+                        nome_cliente, cpf_cliente, parcela_cliente = extrair_dados_cliente(cliente_completo)
+                        valor_parcela = limpar_texto(cols[6].text)
+                        valor_total = limpar_texto(cols[7].text)
+
+                        # 🔥 NOVO: Capturar a Data no 6º TD (índice 5)
+                        data_texto = cols[5].text
+                        import re
+                        match = re.search(r'(\d{2}/\d{2}/\d{4})', data_texto)
+                        data_venda = match.group(1) if match else ''
+
+                        data.append([num_filial, nome_cliente.strip(), cpf_cliente.strip(),
+                                    valor_parcela, valor_total, parcela_cliente, data_venda])
+
+                    except Exception as e:
+                        logging.warning(f'Erro ao processar linha na filial {num_filial}: {e}')
+                        continue
+
+            df = pd.DataFrame(data, columns=['Filial', 'Cliente', 'CPF', 'Valor Parcela', 'Valor Total', 'Parcela', 'Data'])
+            dados_filiais.append(df)
 
         except Exception as e:
             logging.error(f"Erro na filial {cnpj}: {e}")
