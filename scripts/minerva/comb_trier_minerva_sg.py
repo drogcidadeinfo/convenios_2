@@ -108,20 +108,10 @@ def _norm_name_for_key(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-def build_row_key(filial, cpf_digits: str, trier_nome: str, trier_val_num, minerva_nome_for_key: str, minerva_total_for_key) -> str:
+def build_row_key(filial, cpf_digits: str) -> str:
     cpf_digits = normalize_cpf(cpf_digits) or ""
     filial_s = "" if filial is None or pd.isna(filial) else str(int(filial))
-
-    t_nome = _norm_name_for_key(trier_nome)
-    m_nome = _norm_name_for_key(minerva_nome_for_key)
-
-    t_val = parse_brl_money(trier_val_num)
-    m_val = parse_brl_money(minerva_total_for_key)
-
-    t_val = "" if t_val is None else f"{t_val:.2f}"
-    m_val = "" if m_val is None else f"{m_val:.2f}"
-
-    return f"{cpf_digits}|{filial_s}|{t_nome}|{t_val}|{m_nome}|{m_val}"
+    return f"{cpf_digits}|{filial_s}"
 
 # ----------------------------
 # Core: build output rows
@@ -280,33 +270,33 @@ def ensure_sheet_size(ws, min_rows: int, min_cols: int):
         ws.resize(cols=min_cols)
 
 def read_existing_overrides(ws_out) -> dict:
-    """
-    Reads existing rows and returns:
-      key -> (status_user, anotacoes_user)
-    """
     values = ws_out.get_all_values()
     if not values:
         return {}
 
-    hdr = values[0]
-    # Accept both old header (7 cols) and new (8 cols)
-    # Expected positions:
-    # 0 Filial, 1 CPF, 2 TRIER, 3 Valor, 4 MINERVA, 5 Valor, 6 STATUS, 7 Anotações
     overrides = {}
     for row in values[1:]:
-        row = row + [""] * (8 - len(row))  # pad
+        row = row + [""] * (8 - len(row))
+
+        filial_raw = (row[0] or "").strip()
+        try:
+            filial = int(filial_raw) if filial_raw not in ("", "-") else None
+        except ValueError:
+            filial = None
+
         cpf_digits = normalize_cpf(row[1])
-        key = build_row_key(
-            cpf_digits,
-            row[2],
-            row[3],
-            row[4],
-            row[5],
-        )
+
+        trier_nome = row[2]
+        trier_val = row[3]
+        minerva_nome = row[4]
+        minerva_val = row[5]
+
+        key = build_row_key(filial, cpf_digits)
+
         status_user = (row[6] or "").strip()
         anot = (row[7] or "").strip()
-        # Only store if there is something meaningful (but storing blank is fine too)
         overrides[key] = (status_user, anot)
+
     return overrides
 
 def write_values_chunked(ws, values, start_cell="A1", chunk_size=500):
@@ -344,7 +334,7 @@ def apply_status_dropdown(sh, ws, start_row: int, end_row: int):
                     "values": [{"userEnteredValue": s} for s in STATUS_OPTIONS]
                 },
                 "showCustomUi": True,
-                "strict": True
+                "strict": False
             }
         }
     }]
@@ -388,14 +378,7 @@ def main():
         trier_val_fmt = format_brl(d["trier_val"])
         minerva_val_fmt = format_brl(d["minerva_val"]) if d["minerva_val"] is not None else "-"
 
-        key = build_row_key(
-            d["filial"],
-            cpf_digits,
-            trier_nome,
-            d["trier_val"],
-            d.get("minerva_nome_for_key", minerva_nome),
-            d.get("minerva_total_for_key", d["minerva_val"]),
-        )
+        key = build_row_key(d["filial"], cpf_digits)
 
         status_calc = d["status_calc"]
         status_user, anot_user = overrides.get(key, ("", ""))
