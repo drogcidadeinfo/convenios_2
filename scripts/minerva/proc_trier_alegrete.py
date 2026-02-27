@@ -88,7 +88,7 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
     df.dropna(how='all', inplace=True)
     
     df = df.rename(columns={
-        df.columns[0]: 'Nome',
+        df.columns[0]: 'Cliente',
         df.columns[1]: 'Valor',
         df.columns[2]: 'CPF',
     })
@@ -153,7 +153,7 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
     else:
         df["Valor"] = pd.NA
 
-    out = df[["Filial", "Cliente", "CPF", "Valor"]]
+    out = df[["Cliente", "CPF", "Valor"]]
 
     logging.info(f"  -> {os.path.basename(file_path)}: {len(out)} clean rows")
     return out
