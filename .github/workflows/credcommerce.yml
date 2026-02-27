@@ -1,4 +1,4 @@
-name: credcommerce
+name: credcommerce daily update
 
 on:
   workflow_dispatch:
