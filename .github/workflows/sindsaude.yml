@@ -27,17 +27,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install selenium pandas openpyxl xlrd numpy gspread google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client packaging
       
-      - name: download trier file 
-        env:
-          username: ${{ secrets.USERNAME }}
-          password: ${{ secrets.PASSWORD }}
-        run: python scripts/sindsaude/trier.py
+      #- name: download trier file 
+        #env:
+          #username: ${{ secrets.USERNAME }}
+          #password: ${{ secrets.PASSWORD }}
+        #run: python scripts/sindsaude/trier.py
 
-      - name: process trier file
+      #- name: process trier file
+        #env:
+          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        #run: python scripts/sindsaude/proc_trier.py 
+
+      - name: download & process bgcard
         env:
           GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python scripts/sindsaude/proc_trier.py 
+          bgcard_password: ${{ secrets.BGCARD_PASSWORD }}
+          bg_card_num: ${{ secrets.BGCARD_NUM }}
+        run: python scripts/sindsaude/bgcard_download_and_proc.py
         
       #- name: download trier/sg file 
         #env:
