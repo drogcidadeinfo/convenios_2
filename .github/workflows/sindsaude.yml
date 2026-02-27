@@ -44,7 +44,7 @@ jobs:
           GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           bgcard_password: ${{ secrets.BGCARD_PASSWORD }}
-          bg_card_num: ${{ secrets.BGCARD_NUM }}
+          bgcard_num: ${{ secrets.BGCARD_NUM }}
         run: python scripts/sindsaude/bgcard_download_and_proc.py
         
       #- name: download trier/sg file 
