@@ -1,5 +1,6 @@
 import re, os, json
 import unicodedata
+from datetime import datetime
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -12,9 +13,13 @@ SHEET_TRIER = "dados_trier_sg"
 SHEET_MINERVA = "dados_minerva_sg"
 SHEET_OUT = "TRIERxMINERVA_SG"
 
+# NEW: add "Anotações"
 HEADER = ["Filial", "CPF", "TRIER", "Valor", "MINERVA", "Valor", "STATUS", "Anotações"]
 
+# Dropdown options (edit if you want)
 STATUS_OPTIONS = ["✅ OK", "⚠️ VALOR DIVERGENTE", "⚠️ SOMENTE TRIER", "⚠️ SOMENTE MINERVA"]
+
+# tolerância de diferença de valor (para arredondamentos)
 VALUE_TOL = 0.05
 
 
@@ -39,6 +44,7 @@ def normalize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
 def parse_brl_money(x):
     if x is None:
         return None
+
     if isinstance(x, (int, float)) and not pd.isna(x):
         return float(x)
 
@@ -95,16 +101,38 @@ def format_cpf(cpf_digits: str) -> str:
         return "-"
     return re.sub(r"(\d{3})(\d{3})(\d{3})(\d{2})", r"\1.\2.\3-\4", cpf_digits)
 
-def build_row_key(filial, cpf_digits: str) -> str:
+def _norm_name_for_key(s: str) -> str:
+    if s is None:
+        return ""
+    s = strip_accents(str(s)).upper()
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+def build_row_key(filial, cpf_digits: str, trier_nome: str, trier_val_num, minerva_nome_for_key: str, minerva_total_for_key) -> str:
     cpf_digits = normalize_cpf(cpf_digits) or ""
     filial_s = "" if filial is None or pd.isna(filial) else str(int(filial))
-    return f"{cpf_digits}|{filial_s}"
 
+    t_nome = _norm_name_for_key(trier_nome)
+    m_nome = _norm_name_for_key(minerva_nome_for_key)
+
+    t_val = parse_brl_money(trier_val_num)
+    m_val = parse_brl_money(minerva_total_for_key)
+
+    t_val = "" if t_val is None else f"{t_val:.2f}"
+    m_val = "" if m_val is None else f"{m_val:.2f}"
+
+    return f"{cpf_digits}|{filial_s}|{t_nome}|{t_val}|{m_nome}|{m_val}"
 
 # ----------------------------
-# Core: TRIER split by filial, MINERVA total by CPF
+# Core: build output rows
 # ----------------------------
 def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[dict]:
+    """
+    TRIER (A) may have multiple rows per CPF (split by Filial)
+    MINERVA (B) has a single total per CPF
+
+    Output: one row per TRIER line (plus leftover MINERVA-only CPFs)
+    """
     a = normalize_df_columns(df_a)
     b = normalize_df_columns(df_b)
 
@@ -114,6 +142,7 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
         if col not in b.columns:
             raise ValueError(f"Coluna '{col}' não encontrada em {SHEET_MINERVA}. Achei: {list(b.columns)}")
 
+    # Filial exists only in TRIER
     if "filial" not in a.columns:
         a["filial"] = pd.NA
 
@@ -128,21 +157,22 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
     a = a.dropna(subset=["cpf_norm", "Valor_num"])
     b = b.dropna(subset=["cpf_norm", "Valor_num"])
 
-    # MINERVA: cpf -> (total, cliente)
+    # ---- MINERVA: build dict cpf -> total (and client name)
+    # If MINERVA has multiple rows same CPF, sum them (safe).
     b_grp = (
         b.groupby("cpf_norm", as_index=False)
          .agg({"Valor_num": "sum", "cliente": "first"})
     )
     b_map = {row["cpf_norm"]: (float(row["Valor_num"]), str(row["cliente"])) for _, row in b_grp.iterrows()}
 
-    # TRIER: group row indices by CPF
+    # ---- TRIER: group indexes by CPF and sum values
+    out = []
+    used_minerva_cpfs = set()
+
     a_by_cpf = {}
     for i in range(len(a)):
         cpf = a.at[i, "cpf_norm"]
         a_by_cpf.setdefault(cpf, []).append(i)
-
-    out = []
-    used_minerva_cpfs = set()
 
     for cpf, idxs in a_by_cpf.items():
         trier_sum = float(a.loc[idxs, "Valor_num"].sum())
@@ -155,7 +185,7 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
             diff = abs(trier_sum - minerva_total)
             status_all = "✅ OK" if diff <= VALUE_TOL else "⚠️ VALOR DIVERGENTE"
 
-            # consistent order
+            # Sort TRIER lines by filial then value/name for consistent display
             idxs_sorted = sorted(
                 idxs,
                 key=lambda i: (
@@ -169,6 +199,7 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
                 filial_out = a.at[i, "filial"]
                 filial_out = None if pd.isna(filial_out) else int(filial_out)
 
+                # show MINERVA columns only on first line of that CPF
                 show_minerva = (k == 0)
 
                 out.append({
@@ -178,11 +209,13 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
                     "trier_val": float(a.at[i, "Valor_num"]),
                     "minerva_nome": minerva_cliente if show_minerva else "-",
                     "minerva_val": minerva_total if show_minerva else None,
+                    "minerva_total_for_key": minerva_total,   # keep stable key even when display is "-"
+                    "minerva_nome_for_key": minerva_cliente, # keep stable key even when display is "-"
                     "status_calc": status_all,
                 })
 
         else:
-            # only TRIER
+            # CPF exists only in TRIER -> each line is SOMENTE TRIER
             idxs_sorted = sorted(
                 idxs,
                 key=lambda i: (
@@ -203,10 +236,12 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
                     "trier_val": float(a.at[i, "Valor_num"]),
                     "minerva_nome": "-",
                     "minerva_val": None,
+                    "minerva_total_for_key": None,
+                    "minerva_nome_for_key": "",
                     "status_calc": "⚠️ SOMENTE TRIER",
                 })
 
-    # leftover MINERVA-only CPFs
+    # ---- leftover MINERVA-only CPFs
     for cpf, (minerva_total, minerva_cliente) in b_map.items():
         if cpf in used_minerva_cpfs:
             continue
@@ -217,6 +252,8 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
             "trier_val": None,
             "minerva_nome": minerva_cliente,
             "minerva_val": minerva_total,
+            "minerva_total_for_key": minerva_total,
+            "minerva_nome_for_key": minerva_cliente,
             "status_calc": "⚠️ SOMENTE MINERVA",
         })
 
@@ -225,7 +262,6 @@ def build_conferencia_cpf_valor(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[
 
     out.sort(key=sort_key)
     return out
-
 
 # ----------------------------
 # Google Sheets I/O
@@ -244,49 +280,62 @@ def ensure_sheet_size(ws, min_rows: int, min_cols: int):
         ws.resize(cols=min_cols)
 
 def read_existing_overrides(ws_out) -> dict:
+    """
+    Reads existing rows and returns:
+      key -> (status_user, anotacoes_user)
+    """
     values = ws_out.get_all_values()
     if not values:
         return {}
 
+    hdr = values[0]
+    # Accept both old header (7 cols) and new (8 cols)
+    # Expected positions:
+    # 0 Filial, 1 CPF, 2 TRIER, 3 Valor, 4 MINERVA, 5 Valor, 6 STATUS, 7 Anotações
     overrides = {}
     for row in values[1:]:
-        row = row + [""] * (8 - len(row))
-
-        filial_raw = (row[0] or "").strip()
-        try:
-            filial_num = int(filial_raw) if filial_raw not in ("", "-") else None
-        except ValueError:
-            filial_num = None
-
+        row = row + [""] * (8 - len(row))  # pad
         cpf_digits = normalize_cpf(row[1])
-        key = build_row_key(filial_num, cpf_digits)
-
+        key = build_row_key(
+            cpf_digits,
+            row[2],
+            row[3],
+            row[4],
+            row[5],
+        )
         status_user = (row[6] or "").strip()
         anot = (row[7] or "").strip()
+        # Only store if there is something meaningful (but storing blank is fine too)
         overrides[key] = (status_user, anot)
-
     return overrides
 
-def write_values_chunked(ws, values, chunk_size=500):
+def write_values_chunked(ws, values, start_cell="A1", chunk_size=500):
     for i in range(0, len(values), chunk_size):
         chunk = values[i:i + chunk_size]
         start_row = 1 + i
-        ws.update(f"A{start_row}", chunk, value_input_option="RAW")
+        cell = f"A{start_row}"
+        ws.update(cell, chunk, value_input_option="RAW")
 
 def clear_leftover_rows(ws, start_row: int, end_row: int, end_col_letter: str):
+    """
+    Clears A{start_row}:{end_col}{end_row}
+    """
     if end_row >= start_row:
         ws.batch_clear([f"A{start_row}:{end_col_letter}{end_row}"])
 
 def apply_status_dropdown(sh, ws, start_row: int, end_row: int):
-    # STATUS is column G (0-based index 6)
+    """
+    Applies data validation to STATUS column (G) from start_row..end_row
+    """
+    # column G => index 6 (0-based)
     sheet_id = ws.id
     requests = [{
         "setDataValidation": {
             "range": {
                 "sheetId": sheet_id,
-                "startRowIndex": start_row - 1,
-                "endRowIndex": end_row,
-                "startColumnIndex": 6,
+                "startRowIndex": start_row - 1,   # 0-based, inclusive
+                "endRowIndex": end_row,           # 0-based, exclusive
+                "startColumnIndex": 6,            # G
                 "endColumnIndex": 7
             },
             "rule": {
@@ -295,12 +344,11 @@ def apply_status_dropdown(sh, ws, start_row: int, end_row: int):
                     "values": [{"userEnteredValue": s} for s in STATUS_OPTIONS]
                 },
                 "showCustomUi": True,
-                "strict": False
+                "strict": True
             }
         }
     }]
     sh.batch_update({"requests": requests})
-
 
 def main():
     if not SPREADSHEET_ID:
@@ -326,6 +374,7 @@ def main():
     ws_out = upsert_worksheet(sh, SHEET_OUT, rows=max(2000, len(items) + 5), cols=10)
     ensure_sheet_size(ws_out, min_rows=max(2000, len(items) + 5), min_cols=8)
 
+    # NEW: load existing STATUS/Anotações so we don't overwrite user edits
     overrides = read_existing_overrides(ws_out)
 
     rows = []
@@ -339,12 +388,19 @@ def main():
         trier_val_fmt = format_brl(d["trier_val"])
         minerva_val_fmt = format_brl(d["minerva_val"]) if d["minerva_val"] is not None else "-"
 
-        key = build_row_key(d["filial"], cpf_digits)
+        key = build_row_key(
+            d["filial"],
+            cpf_digits,
+            trier_nome,
+            d["trier_val"],
+            d.get("minerva_nome_for_key", minerva_nome),
+            d.get("minerva_total_for_key", d["minerva_val"]),
+        )
 
         status_calc = d["status_calc"]
         status_user, anot_user = overrides.get(key, ("", ""))
 
-        # Keep user override if present; else use calculated
+        # If user already changed status, keep it; else use calculated
         status_final = status_user if status_user else status_calc
 
         rows.append([
@@ -355,21 +411,23 @@ def main():
             minerva_nome,
             minerva_val_fmt,
             status_final,
-            anot_user
+            anot_user  # preserve notes
         ])
 
     values = [HEADER] + rows
 
+    # Write new table (without wiping the entire sheet)
     write_values_chunked(ws_out, values, chunk_size=500)
 
+    # Clear leftovers (if previous run had more rows)
     prev_len = len(ws_out.get_all_values())
     new_len = len(values)
     if prev_len > new_len:
         clear_leftover_rows(ws_out, start_row=new_len + 1, end_row=prev_len, end_col_letter="H")
 
+    # Apply dropdown to STATUS column for the rows we wrote
     if len(values) >= 2:
         apply_status_dropdown(sh, ws_out, start_row=2, end_row=len(values))
-
 
 if __name__ == "__main__":
     main()
