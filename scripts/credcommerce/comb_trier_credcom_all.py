@@ -232,7 +232,7 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
                 if (t_val is not None) and (c_val is not None) and abs(float(t_val) - float(c_val)) <= VALUE_TOL:
                     status = "✅ OK"
                 else:
-                    status = "⚠️ VALOR"
+                    status = "⚠️ VALOR DIVERGENTE"
 
                 out_rows.append([
                     filial,
@@ -258,7 +258,7 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
                     format_brl(t_val),
                     "-",
                     "-",
-                    "⚠️ SÓ TRIER"
+                    "⚠️ SOMENTE TRIER"
                 ])
 
         # sobrou CREDCOM sem par
@@ -279,7 +279,7 @@ def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> lis
                 "-",
                 c_name,
                 format_brl(c_val),
-                "⚠️ SÓ CREDCOM"
+                "⚠️ SOMENTE CREDCOM"
             ])
 
     # ordena para ficar bem “conferência”
