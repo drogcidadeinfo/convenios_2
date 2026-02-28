@@ -41,11 +41,11 @@ jobs:
 
       - name: download & process bgcard
         env:
-          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          FL1: ${{ secrets.FL1 }}
+          FL2: ${{ secrets.FL2 }}
           bgcard_password: ${{ secrets.BGCARD_PASSWORD }}
           bgcard_num: ${{ secrets.BGCARD_NUM }}
-        run: python scripts/sindsaude/bgcard_download_and_proc.py
+        run: python scripts/sindsaude/bgcard.py
         
       #- name: download trier/sg file 
         #env:
