@@ -16,10 +16,10 @@ from selenium.webdriver.support import expected_conditions as EC
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Environment variables
-bgcard_num = os.geten("bgcard_num")
-bgcard_password = os.geten("bgcard_password")
-fl1 = os.geten("FL1")
-fl2 = os.geten("FL2")
+bgcard_num = os.getenv("bgcard_num")
+bgcard_password = os.getenv("bgcard_password")
+fl1 = os.getenv("FL1")
+fl2 = os.getenv("FL2")
 
 if not bgcard_num or not bgcard_password:
     raise ValueError("Environment variables 'bgcard_num' and/or 'bgcard_password' not set.")
