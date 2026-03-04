@@ -2,8 +2,8 @@ name: credcommerce daily update
 
 on:
   workflow_dispatch:
-  # schedule:
-    # - cron: "15 6 * * *"  # 06:15 UTC (adjust)
+  schedule:
+    - cron: '0 5 * * *'  # Runs every day at 2am GMT-3
 
 jobs:
   run:
