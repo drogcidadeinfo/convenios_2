@@ -286,6 +286,13 @@ def main():
 
     update_google_sheet(final_df, sheet_id)
 
+    # 🔥 DELETE FILES AFTER SUCCESS
+    for f in all_files:
+        try:
+            os.remove(f)
+            logging.info(f"Deleted processed file: {os.path.basename(f)}")
+        except Exception as e:
+            logging.error(f"Failed to delete {f}: {e}")
 
 if __name__ == "__main__":
     main()
