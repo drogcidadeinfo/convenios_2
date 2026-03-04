@@ -310,7 +310,7 @@ def main():
         raise ValueError("SPREADSHEET_ID não definido no ambiente.")
     
     # For testing without Google Sheets
-    '''if os.getenv("TEST_MODE") == "1":
+    if os.getenv("TEST_MODE") == "1":
         print("Running in test mode...")
         # Create sample data matching your images
         bgcard_data = {
@@ -333,7 +333,7 @@ def main():
             'Parcela': ['1/3', '3/3', '4/5', '3/5', '1/3'],
             'Valor Parcela': [24.06, 24.06, 20.69, 20.69, 30.7],
             'Valor Total': [72.18, 72.18, 103.45, 103.45, 92.1]
-        }'''
+        }
         
         df_bgcard = pd.DataFrame(bgcard_data)
         df_trier = pd.DataFrame(trier_data)
