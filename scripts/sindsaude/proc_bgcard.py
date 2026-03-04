@@ -48,7 +48,7 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
         
         # Clean and convert value columns
         # Remove quotes if present and convert to float
-        for col in ['VALOR PARCELA', 'VALOR TOTAL']:
+        '''for col in ['VALOR PARCELA', 'VALOR TOTAL']:
             if col in df.columns:
                 # Remove quotes and convert comma to dot for decimal
                 # df[col] = df[col].astype(str).str.replace('"', '').str.replace('.', '').str.replace(',', '.').astype(float)
@@ -59,7 +59,7 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
                     .str.replace('.', '', regex=False)   # FIXED
                     .str.replace(',', '.', regex=False)
                     .astype(float)
-                )
+                )'''
         
         # Ensure PARCELA is treated as string
         if 'PARCELA' in df.columns:
