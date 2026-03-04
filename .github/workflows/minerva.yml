@@ -27,17 +27,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install selenium pandas openpyxl xlrd numpy gspread google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client packaging
       
-      #- name: download trier/alegrete file 
-        #env:
-          #username: ${{ secrets.USERNAME }}
-          #password: ${{ secrets.PASSWORD }}
-        #run: python scripts/minerva/trier_alegrete.py
+      - name: download trier/alegrete file 
+        env:
+          username: ${{ secrets.USERNAME }}
+          password: ${{ secrets.PASSWORD }}
+        run: python scripts/minerva/trier_alegrete.py
 
-      #- name: process trier/alegrete file 
-        #env:
-          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        #run: python scripts/minerva/proc_trier_alegrete.py 
+      - name: process trier/alegrete file 
+        env:
+          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: python scripts/minerva/proc_trier_alegrete.py 
         
       - name: download trier/sg file 
         env:
