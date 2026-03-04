@@ -98,8 +98,10 @@ def update_worksheet(df: pd.DataFrame, sheet_id: str, worksheet_name: str, clien
             row['CLIENTE'],
             row['FILIAL'] if row['FILIAL'] is not None else "",
             row['PARCELA'],
-            float(row['VALOR PARCELA']),
-            float(row['VALOR TOTAL'])
+            #float(row['VALOR PARCELA']),
+            #float(row['VALOR TOTAL'])
+            row['VALOR PARCELA'],
+            row['VALOR TOTAL']
         ])
 
     ws.update(f'A{next_row}', data, value_input_option='USER_ENTERED')
