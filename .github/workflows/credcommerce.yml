@@ -39,8 +39,8 @@ jobs:
 
       - name: Upload trier file
         env:
-          username: ${{ secrets.USERNAME }}
-          password: ${{ secrets.PASSWORD }}
+          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: python scripts/credcommerce/proc_trier_credcom_all.py
         
       - name: Update TRIERxCREDCOM sheet
