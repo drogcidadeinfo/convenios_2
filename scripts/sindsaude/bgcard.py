@@ -159,6 +159,7 @@ if all_data:
     filename = f'dados_bgcard.csv'
     df.to_csv(filename, index=False, encoding='utf-8-sig')
     logging.info(f"\n✅ Arquivo salvo: {filename}")
+    logging.info("\n%s", df.head())
     
     # Estatísticas por filial
     logging.info("\n📊 Resumo por filial:")
