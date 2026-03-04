@@ -51,7 +51,15 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
         for col in ['VALOR PARCELA', 'VALOR TOTAL']:
             if col in df.columns:
                 # Remove quotes and convert comma to dot for decimal
-                df[col] = df[col].astype(str).str.replace('"', '').str.replace('.', '').str.replace(',', '.').astype(float)
+                # df[col] = df[col].astype(str).str.replace('"', '').str.replace('.', '').str.replace(',', '.').astype(float)
+                df[col] = (
+                    df[col]
+                    .astype(str)
+                    .str.replace('"', '', regex=False)
+                    .str.replace('.', '', regex=False)   # FIXED
+                    .str.replace(',', '.', regex=False)
+                    .astype(float)
+                )
         
         # Ensure PARCELA is treated as string
         if 'PARCELA' in df.columns:
@@ -92,42 +100,6 @@ def update_worksheet(df: pd.DataFrame, sheet_id: str, worksheet_name: str, clien
     # Monta a lista mantendo os tipos corretos
     data = []
     for row in df.to_dict('records'):
-        # Format the values as strings with Brazilian format
-        valor_parcela = f"{float(row['VALOR PARCELA']):,.2f}".replace('.', ',').replace(',,', ',')
-        valor_total = f"{float(row['VALOR TOTAL']):,.2f}".replace('.', ',').replace(',,', ',')
-        
-        data.append([
-            row['DATA'],
-            row['CPF'],
-            row['CLIENTE'],
-            row['FILIAL'] if row['FILIAL'] is not None else "",
-            row['PARCELA'],
-            valor_parcela,
-            valor_total
-        ])
-
-    ws.update(f'A{next_row}', data, value_input_option='USER_ENTERED')
-    logging.info(f"Updated '{worksheet_name}' with {len(df)} rows.")
-
-'''def update_worksheet(df: pd.DataFrame, sheet_id: str, worksheet_name: str, client: gspread.Client):
-    sh = client.open_by_key(sheet_id)
-
-    try:
-        ws = sh.worksheet(worksheet_name)
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=worksheet_name, rows=1000, cols=max(1, len(df.columns)))
-        logging.info(f"Worksheet '{worksheet_name}' created.")
-
-    existing_values = ws.get_all_values()
-    next_row = len(existing_values) + 1
-
-    # Converte DATA para datetime garantindo que são objetos de data
-    df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce', dayfirst=True)
-    df['DATA'] = df['DATA'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "")
-
-    # Monta a lista mantendo os tipos corretos
-    data = []
-    for row in df.to_dict('records'):
         data.append([
             row['DATA'],
             row['CPF'],
@@ -139,7 +111,7 @@ def update_worksheet(df: pd.DataFrame, sheet_id: str, worksheet_name: str, clien
         ])
 
     ws.update(f'A{next_row}', data, value_input_option='USER_ENTERED')
-    logging.info(f"Updated '{worksheet_name}' with {len(df)} rows.")'''
+    logging.info(f"Updated '{worksheet_name}' with {len(df)} rows.")
 
 def update_google_sheet(df: pd.DataFrame, sheet_id: str):
     """Authorize and update the Google Sheet."""
