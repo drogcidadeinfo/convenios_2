@@ -27,17 +27,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install selenium pandas openpyxl xlrd numpy gspread google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client packaging
       
-      #- name: download trier file 
-        #env:
-          #username: ${{ secrets.USERNAME }}
-          #password: ${{ secrets.PASSWORD }}
-        #run: python scripts/sindsaude/trier.py
+      - name: download trier file 
+        env:
+          username: ${{ secrets.USERNAME }}
+          password: ${{ secrets.PASSWORD }}
+        run: python scripts/sindsaude/trier.py
 
-      #- name: process trier file
-        #env:
-          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        #run: python scripts/sindsaude/proc_trier.py 
+      - name: process trier file
+        env:
+          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: python scripts/sindsaude/proc_trier.py 
 
       - name: download bgcard file
         env:
@@ -53,52 +53,3 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: python scripts/sindsaude/proc_bgcard.py 
         
-      #- name: download trier/sg file 
-        #env:
-          #username: ${{ secrets.USERNAME }}
-          #password: ${{ secrets.PASSWORD }}
-        #run: python scripts/minerva/trier_sg.py
-
-      #- name: process trier/sg file 
-        #env:
-          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        #run: python scripts/minerva/proc_trier_sg.py 
-
-      #- name: download minerva/alegrete file 
-        #env:
-          #minerva_username: ${{ secrets.MINERVA_USERNAME }}
-          #minerva_password: ${{ secrets.MINERVA_PASSWORD }}
-        #run: python scripts/minerva/epays_alegrete.py
-
-      #- name: process minerva/alegrete file 
-        #env:
-          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        #run: python scripts/minerva/proc_minerva_alegrete.py 
-
-      #- name: download minerva/sg file 
-        #env:
-          #minerva_username: ${{ secrets.MINERVA_USERNAME }}
-          #minerva_password: ${{ secrets.MINERVA_PASSWORD }}
-        #run: python scripts/minerva/epays_sg.py
-
-      #- name: process minerva/sg file 
-        #env:
-          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        #run: python scripts/minerva/proc_minerva_sg.py 
-
-      #- name: Upload data to spreadsheet
-        #env:
-          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        #run: |
-          #python scripts/minerva/comb_trier_minerva_sg.py
-
-      #- name: Upload data to spreadsheet
-        #env:
-          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        #run: |
-          #python scripts/minerva/comb_trier_minerva_alegrete.py
