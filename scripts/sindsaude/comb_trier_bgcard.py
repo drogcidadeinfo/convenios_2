@@ -327,12 +327,38 @@ def read_existing_annotations(ws_out) -> dict:
 
     return annotations
 
+def to_python(value):
+    """
+    Convert numpy / pandas types to pure Python types
+    """
+    if pd.isna(value):
+        return ""
+    if hasattr(value, "item"):  # catches numpy types
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
+
+
 def write_values_chunked(ws, values, start_cell="A1", chunk_size=500):
     for i in range(0, len(values), chunk_size):
         chunk = values[i:i + chunk_size]
+
+        # 🔥 convert entire chunk to pure Python
+        clean_chunk = [
+            [to_python(cell) for cell in row]
+            for row in chunk
+        ]
+
         start_row = 1 + i
         cell = f"A{start_row}"
-        ws.update(cell, chunk, value_input_option="RAW")
+
+        ws.update(
+            range_name=cell,
+            values=clean_chunk,
+            value_input_option="RAW"
+        )
 
 def clear_leftover_rows(ws, start_row: int, end_row: int, end_col_letter: str):
     """
