@@ -24,6 +24,11 @@ fl2 = os.getenv("FL2")
 if not bgcard_num or not bgcard_password:
     raise ValueError("Environment variables 'bgcard_num' and/or 'bgcard_password' not set.")
 
+# Calculate date range
+today = datetime.today()
+yesterday = today - timedelta(days=1)
+target_day = yesterday.strftime('%d/%m/%Y')
+
 download_dir = os.getcwd()
 
 # set up chrome options for headless mode/configure download behavior
@@ -98,7 +103,7 @@ for cnpj, num_filial in cnpjs.items():
             campo_data_inicio.send_keys("01/02/2026")
 
             campo_data_fim = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="f_date2"]')))
-            campo_data_fim.send_keys("27/02/2026")
+            campo_data_fim.send_keys(target_day)
 
             wait.until(EC.element_to_be_clickable((By.XPATH, '/html/body/table[2]/tbody/tr[1]/td/form/table[3]/tbody/tr[3]/td[3]/input'))).click()
 
