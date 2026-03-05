@@ -415,7 +415,7 @@ def main():
             logging.info(f"📌 Processing account {idx}/{len(accounts)}: {acc['name']}")
             
             try:
-                df_acc = extract_for_account(acc, target_day=target_day, test_day=test_day)
+                df_acc = extract_for_account(acc, target_day=target_day, test_day=target_day)
                 
                 if not df_acc.empty:
                     all_dfs.append(df_acc)
