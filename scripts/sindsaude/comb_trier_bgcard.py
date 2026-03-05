@@ -31,15 +31,19 @@ HEADER = [
 
 VALUE_TOL = 0.75   # tolerância
 
-# Column mappings (original -> normalized)
+# Column mappings (original -> normalized) - expanded to handle variations
 COLUMN_MAPPING = {
     'filial': 'filial',
     'data': 'data',
+    'data emissao': 'data',
+    'data_emissao': 'data',
     'cliente': 'cliente',
     'cpf': 'cpf',
     'parcela': 'parcela',
     'valor parcela': 'valor_parcela',
-    'valor total': 'valor_total'
+    'valor_parcela': 'valor_parcela',
+    'valor total': 'valor_total',
+    'valor_total': 'valor_total'
 }
 
 # ----------------------------
@@ -47,14 +51,19 @@ COLUMN_MAPPING = {
 # ----------------------------
 def normalize_colname(x):
     """Normalize column name to lowercase, remove accents and extra spaces."""
-    s = str(x).replace("\xa0", " ").strip().lower()
+    if not isinstance(x, str):
+        x = str(x)
+    s = x.replace("\xa0", " ").strip().lower()
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
-    return re.sub(r"\s+", " ", s).replace(' ', '_')  # Replace spaces with underscores
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def normalize_df_columns(df):
     """Normalize DataFrame columns and map to expected names."""
+    if df.empty:
+        return df, {}
+    
     df = df.copy()
     
     # First normalize all column names
@@ -63,10 +72,10 @@ def normalize_df_columns(df):
     
     # Then map to expected column names if they match our patterns
     expected_cols = {}
-    for norm_col in normalized_cols:
-        for orig, norm in COLUMN_MAPPING.items():
-            if norm in norm_col or orig in norm_col:
-                expected_cols[norm] = norm_col
+    for expected, normalized in COLUMN_MAPPING.items():
+        for col in normalized_cols:
+            if expected in col or normalized in col:
+                expected_cols[normalized] = col
                 break
     
     return df, expected_cols
@@ -74,9 +83,18 @@ def normalize_df_columns(df):
 
 def parse_date_br(x):
     """Parse Brazilian date format."""
-    if not x or pd.isna(x):
+    if not x or pd.isna(x) or x == "":
         return None
     try:
+        # Handle different date formats
+        if isinstance(x, str):
+            # Try common Brazilian formats
+            for fmt in ['%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d']:
+                try:
+                    d = datetime.strptime(x, fmt)
+                    return d.date()
+                except ValueError:
+                    continue
         d = pd.to_datetime(x, dayfirst=True, errors="coerce")
         return None if pd.isna(d) else d.date()
     except:
@@ -87,10 +105,10 @@ def parse_parcela(x):
     """
     Parse parcel format like "1/5" -> (1, 5)
     """
-    if not x or pd.isna(x):
+    if not x or pd.isna(x) or x == "":
         return (None, None)
 
-    m = re.search(r"(\d+)\s*/\s*(\d+)", str(x))
+    m = re.search(r"(\d+)\s*[\/\-]\s*(\d+)", str(x))
     if not m:
         return (None, None)
 
@@ -99,9 +117,33 @@ def parse_parcela(x):
 
 def clean_cpf(x):
     """Remove non-digits from CPF."""
-    if pd.isna(x):
+    if pd.isna(x) or x == "":
         return ""
     return re.sub(r"\D", "", str(x))
+
+
+def safe_float_convert(value):
+    """Safely convert value to float, handling currency formats."""
+    if pd.isna(value) or value == "" or value is None:
+        return 0.0
+    
+    try:
+        # If already numeric, return as float
+        if isinstance(value, (int, float)):
+            return float(value)
+        
+        # Convert to string and clean
+        s = str(value).strip()
+        
+        # Remove currency symbol and thousand separators
+        # Using raw string to avoid escape sequence warning
+        s = re.sub(r'[R$\s]', '', s)  # Remove R$, spaces
+        s = s.replace('.', '')  # Remove thousand separators
+        s = s.replace(',', '.')  # Replace decimal comma with dot
+        
+        return float(s)
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def safe_get_worksheet(sh, sheet_name):
@@ -111,6 +153,18 @@ def safe_get_worksheet(sh, sheet_name):
     except gspread.WorksheetNotFound:
         print(f"Warning: Worksheet '{sheet_name}' not found")
         return None
+
+
+def format_value_for_json(val):
+    """Format value to be JSON serializable (no NaN, Infinity)."""
+    if pd.isna(val) or val is None or val == "":
+        return ""
+    if isinstance(val, float) and (np.isnan(val) or np.isinf(val)):
+        return 0.0
+    if isinstance(val, (int, float)):
+        # Round to 2 decimal places for currency
+        return round(float(val), 2)
+    return str(val)
 
 
 # ----------------------------
@@ -127,31 +181,32 @@ def build_rows(df_trier, df_bg):
     t, t_cols = normalize_df_columns(df_trier)
     b, b_cols = normalize_df_columns(df_bg)
     
-    # Check if required columns exist
+    print(f"TRIER columns: {list(t.columns)}")
+    print(f"BGCARD columns: {list(b.columns)}")
+    print(f"TRIER mapping: {t_cols}")
+    print(f"BGCARD mapping: {b_cols}")
+    
+    # Required columns with fallbacks
     required_cols = ['cpf', 'data', 'cliente', 'parcela', 'valor_parcela', 'valor_total', 'filial']
     
-    for df_name, df, col_map in [("TRIER", t, t_cols), ("BGCARD", b, b_cols)]:
-        missing = [col for col in required_cols if col not in col_map]
-        if missing and not df.empty:
-            print(f"Warning: {df_name} missing columns: {missing}")
-            # Add empty columns for missing ones to avoid KeyError
-            for col in missing:
-                df[col] = None
-
     # Standardize columns using mapped names
-    for df, col_map in [(t, t_cols), (b, b_cols)]:
+    for df_name, df, col_map in [("TRIER", t, t_cols), ("BGCARD", b, b_cols)]:
         if not df.empty:
-            # Use mapped column names where available
-            df['cpf'] = df[col_map.get('cpf', 'cpf')].apply(clean_cpf)
+            # CPF
+            cpf_col = col_map.get('cpf', 'cpf')
+            if cpf_col in df.columns:
+                df['cpf'] = df[cpf_col].apply(clean_cpf)
+            else:
+                df['cpf'] = ""
             
-            # Parse date
+            # Date
             data_col = col_map.get('data', 'data')
             if data_col in df.columns:
                 df['data_emissao'] = df[data_col].apply(parse_date_br)
             else:
                 df['data_emissao'] = None
             
-            # Parse parcela
+            # Parcela
             parcela_col = col_map.get('parcela', 'parcela')
             if parcela_col in df.columns:
                 df[['parcela_n', 'parcela_total']] = df[parcela_col].apply(
@@ -161,34 +216,35 @@ def build_rows(df_trier, df_bg):
                 df['parcela_n'] = None
                 df['parcela_total'] = None
             
-            # Get numeric values
+            # Valor Parcela
             valor_parcela_col = col_map.get('valor_parcela', 'valor_parcela')
+            if valor_parcela_col in df.columns:
+                df['valor_parcela_num'] = df[valor_parcela_col].apply(safe_float_convert)
+            else:
+                print(f"Warning: {df_name} missing 'valor_parcela' column, using 0")
+                df['valor_parcela_num'] = 0.0
+            
+            # Valor Total
             valor_total_col = col_map.get('valor_total', 'valor_total')
+            if valor_total_col in df.columns:
+                df['valor_total_num'] = df[valor_total_col].apply(safe_float_convert)
+            else:
+                print(f"Warning: {df_name} missing 'valor_total' column, using 0")
+                df['valor_total_num'] = 0.0
             
-            # Convert to float, handling currency strings
-            df['valor_parcela_num'] = pd.to_numeric(
-                df[valor_parcela_col].astype(str).str.replace('R\$', '', regex=True)
-                .str.replace('.', '', regex=False)
-                .str.replace(',', '.', regex=False)
-                .str.strip(), 
-                errors='coerce'
-            )
-            
-            df['valor_total_num'] = pd.to_numeric(
-                df[valor_total_col].astype(str).str.replace('R\$', '', regex=True)
-                .str.replace('.', '', regex=False)
-                .str.replace(',', '.', regex=False)
-                .str.strip(),
-                errors='coerce'
-            )
-            
-            # Get cliente name
+            # Cliente
             cliente_col = col_map.get('cliente', 'cliente')
-            df['cliente_name'] = df[cliente_col].astype(str).str.strip()
+            if cliente_col in df.columns:
+                df['cliente_name'] = df[cliente_col].astype(str).str.strip()
+            else:
+                df['cliente_name'] = ""
             
-            # Get filial
+            # Filial
             filial_col = col_map.get('filial', 'filial')
-            df['filial'] = df[filial_col]
+            if filial_col in df.columns:
+                df['filial'] = df[filial_col].astype(str).str.strip()
+            else:
+                df['filial'] = ""
 
     used_bg = set()
     out = []
@@ -207,7 +263,7 @@ def build_rows(df_trier, df_bg):
                     continue
 
                 # Skip if either has missing required data
-                if pd.isna(row_t.get('cpf')) or pd.isna(row_b.get('cpf')):
+                if not row_t.get('cpf') or not row_b.get('cpf'):
                     continue
 
                 # CPF must match
@@ -215,23 +271,31 @@ def build_rows(df_trier, df_bg):
                     continue
 
                 # parcela number must match (if both have it)
-                if not pd.isna(row_t.get('parcela_n')) and not pd.isna(row_b.get('parcela_n')):
-                    if row_t['parcela_n'] != row_b['parcela_n']:
-                        continue
+                if row_t.get('parcela_n') and row_b.get('parcela_n'):
+                    try:
+                        if int(row_t['parcela_n']) != int(row_b['parcela_n']):
+                            continue
+                    except (ValueError, TypeError):
+                        pass
 
                 # compare values with tolerance
-                if not pd.isna(row_t.get('valor_parcela_num')) and not pd.isna(row_b.get('valor_parcela_num')):
-                    diff = abs(row_t['valor_parcela_num'] - row_b['valor_parcela_num'])
+                val_t = row_t.get('valor_parcela_num', 0)
+                val_b = row_b.get('valor_parcela_num', 0)
+                
+                diff = abs(val_t - val_b)
+                
+                if diff <= VALUE_TOL:
+                    # Check total as well
+                    total_t = row_t.get('valor_total_num', 0)
+                    total_b = row_b.get('valor_total_num', 0)
+                    total_diff = abs(total_t - total_b)
                     
-                    if diff <= VALUE_TOL:
-                        # Check total as well
-                        total_diff = abs(row_t.get('valor_total_num', 0) - row_b.get('valor_total_num', 0))
-                        if total_diff <= VALUE_TOL:
-                            match_index = j
-                            break
-                        elif diff < best_diff:
-                            best_diff = diff
-                            best_match = j
+                    if total_diff <= VALUE_TOL:
+                        match_index = j
+                        break
+                    elif diff < best_diff:
+                        best_diff = diff
+                        best_match = j
 
             # If exact match not found but we have a best match within tolerance
             if match_index is None and best_match is not None:
@@ -250,26 +314,25 @@ def build_rows(df_trier, df_bg):
                 trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
                 bg_parcela = f"{row_b.get('parcela_n', '?')}/{row_b.get('parcela_total', '?')}"
                 
-                trier_name = f"{trier_cliente} — PARCELA {trier_parcela}"
-                bg_name = f"{bg_cliente} — PARCELA {bg_parcela}"
+                trier_name = f"{trier_cliente} — PARCELA {trier_parcela}" if trier_cliente else f"PARCELA {trier_parcela}"
+                bg_name = f"{bg_cliente} — PARCELA {bg_parcela}" if bg_cliente else f"PARCELA {bg_parcela}"
 
                 # check total parcelas
-                if (not pd.isna(row_t.get('parcela_total')) and 
-                    not pd.isna(row_b.get('parcela_total')) and
-                    row_t['parcela_total'] != row_b['parcela_total']):
+                if (row_t.get('parcela_total') and row_b.get('parcela_total') and
+                    str(row_t['parcela_total']) != str(row_b['parcela_total'])):
                     status = "⚠️ NUM DE PARCELAS DIVERGENTES"
                 else:
                     status = "✅ OK"
 
                 out.append([
-                    row_t.get('filial', ''),
+                    format_value_for_json(row_t.get('filial', '')),
                     row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
                     trier_name,
-                    row_t.get('valor_parcela_num', 0),
-                    row_t.get('valor_total_num', 0),
+                    format_value_for_json(row_t.get('valor_parcela_num', 0)),
+                    format_value_for_json(row_t.get('valor_total_num', 0)),
                     bg_name,
-                    row_b.get('valor_parcela_num', 0),
-                    row_b.get('valor_total_num', 0),
+                    format_value_for_json(row_b.get('valor_parcela_num', 0)),
+                    format_value_for_json(row_b.get('valor_total_num', 0)),
                     status
                 ])
 
@@ -277,14 +340,14 @@ def build_rows(df_trier, df_bg):
             else:
                 trier_cliente = str(row_t.get('cliente_name', '')).strip()
                 trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
-                trier_name = f"{trier_cliente} — PARCELA {trier_parcela}"
+                trier_name = f"{trier_cliente} — PARCELA {trier_parcela}" if trier_cliente else f"PARCELA {trier_parcela}"
 
                 out.append([
-                    row_t.get('filial', ''),
+                    format_value_for_json(row_t.get('filial', '')),
                     row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
                     trier_name,
-                    row_t.get('valor_parcela_num', 0),
-                    row_t.get('valor_total_num', 0),
+                    format_value_for_json(row_t.get('valor_parcela_num', 0)),
+                    format_value_for_json(row_t.get('valor_total_num', 0)),
                     "-",
                     "-",
                     "-",
@@ -299,17 +362,17 @@ def build_rows(df_trier, df_bg):
 
             bg_cliente = str(row_b.get('cliente_name', '')).strip()
             bg_parcela = f"{row_b.get('parcela_n', '?')}/{row_b.get('parcela_total', '?')}"
-            bg_name = f"{bg_cliente} — PARCELA {bg_parcela}"
+            bg_name = f"{bg_cliente} — PARCELA {bg_parcela}" if bg_cliente else f"PARCELA {bg_parcela}"
 
             out.append([
-                row_b.get('filial', ''),
+                format_value_for_json(row_b.get('filial', '')),
                 row_b['data_emissao'].strftime("%d/%m/%Y") if row_b.get('data_emissao') else '',
                 "-",
                 "-",
                 "-",
                 bg_name,
-                row_b.get('valor_parcela_num', 0),
-                row_b.get('valor_total_num', 0),
+                format_value_for_json(row_b.get('valor_parcela_num', 0)),
+                format_value_for_json(row_b.get('valor_total_num', 0)),
                 "⚠️ SOMENTE BGCARD"
             ])
 
@@ -366,15 +429,21 @@ def main():
             ws_out = sh.add_worksheet(title=SHEET_OUT, rows=2000, cols=10)
             print(f"Created new worksheet: {SHEET_OUT}")
 
-        values = [HEADER] + rows
+        # Clear existing content
         ws_out.clear()
-        ws_out.update("A1", values)
+        
+        # Prepare values with header
+        values = [HEADER] + rows
+        
+        # Update using correct parameter order (values first, then range)
+        ws_out.update(values=values, range_name='A1')
         
         print(f"Successfully updated {SHEET_OUT} with {len(rows)} rows")
 
     except Exception as e:
         print(f"Error in main execution: {str(e)}")
-        raise
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
