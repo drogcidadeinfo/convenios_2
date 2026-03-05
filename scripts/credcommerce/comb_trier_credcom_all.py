@@ -234,7 +234,7 @@ def main():
 
     values = [HEADER] + rows
     ws_out.clear()
-    ws_out.update("A1", values, value_input_option="USER_ENTERED")
+    ws_out.update("A1", values, value_input_option="RAW")
 
 
 if __name__ == "__main__":
