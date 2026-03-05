@@ -104,9 +104,9 @@ try:
     WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "selecao_periodo_emiLabel"))).click()
     time.sleep(2)
 
-    driver.find_element(By.ID, "dat_init").send_keys("01032026")
+    driver.find_element(By.ID, "dat_init").send_keys(target_day)
     time.sleep(5)
-    driver.find_element(By.ID, "dat_fim").send_keys("03032026")
+    driver.find_element(By.ID, "dat_fim").send_keys(target_day)
     time.sleep(2)
         
     # report format; downloads pdf file
