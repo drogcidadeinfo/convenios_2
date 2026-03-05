@@ -46,6 +46,23 @@ def retry_api_call(func, retries=3, delay=2):
     raise Exception("Max retries reached.")
 
 
+def format_as_currency(value):
+    """Format a numeric value as Brazilian currency string."""
+    if pd.notnull(value) and value != "":
+        # Convert to float if it's a string
+        if isinstance(value, str):
+            try:
+                # Handle Brazilian format (comma as decimal separator)
+                value = float(value.replace(',', '.'))
+            except ValueError:
+                return value
+        
+        # Format as Brazilian currency (R$ with comma as decimal separator)
+        formatted = f"R$ {value:.2f}".replace('.', ',')
+        return formatted
+    return ""
+
+
 def clean_transfer_file(file_path: str) -> pd.DataFrame:
     logging.info(f"Reading: {os.path.basename(file_path)}")
 
@@ -155,6 +172,7 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
 
     return df_result
 
+
 # -------------------------------------------------
 # Google Sheets update
 # -------------------------------------------------
@@ -174,17 +192,24 @@ def update_worksheet(df: pd.DataFrame, sheet_id: str, worksheet_name: str, clien
     df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce', dayfirst=True)
     df['DATA'] = df['DATA'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "")
 
+    # Create a copy to avoid modifying the original dataframe
+    df_formatted = df.copy()
+    
+    # Apply currency formatting to VALOR PARCELA and VALOR TOTAL
+    df_formatted['VALOR PARCELA'] = df_formatted['VALOR PARCELA'].apply(format_as_currency)
+    df_formatted['VALOR TOTAL'] = df_formatted['VALOR TOTAL'].apply(format_as_currency)
+
     # Monta a lista mantendo os tipos corretos
     data = []
-    for row in df.to_dict('records'):
+    for row in df_formatted.to_dict('records'):
         data.append([
             row['DATA'],
             row['CPF'],
             row['CLIENTE'],
             row['FILIAL'] if row['FILIAL'] is not None else "",
             row['PARCELA'],
-            float(row['VALOR PARCELA']),
-            float(row['VALOR TOTAL'])
+            row['VALOR PARCELA'],  # Now this will be formatted as currency string
+            row['VALOR TOTAL']      # Now this will be formatted as currency string
         ])
 
     ws.update(f'A{next_row}', data, value_input_option='USER_ENTERED')
