@@ -1,372 +1,221 @@
-import re, os, json
+import re
+import os
+import json
 import unicodedata
 from datetime import datetime
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
+
 # ----------------------------
 # Config
 # ----------------------------
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-SHEET_TRIER = "dados_trier"
-SHEET_CREDCOM = "dados_cred_commerce"
-SHEET_OUT = "TRIERxCREDCOM"
 
-# Updated header with Anotações
-HEADER = ["Filial", "Data Emissão", "TRIER", "Valor", "CREDCOM", "Valor", "STATUS", "Anotações"]
+SHEET_TRIER = "dados_trier_sind"
+SHEET_BGCARD = "dados_bgcard"
+SHEET_OUT = "TRIERxSIND"
 
-# tolerância de diferença de valor (para arredondamentos)
-VALUE_TOL = 0.05
+HEADER = [
+    "Filial",
+    "Data Emissão",
+    "TRIER",
+    "Valor Parcela",
+    "Valor Total",
+    "BGCARD",
+    "Valor Parcela",
+    "Valor Total",
+    "STATUS"
+]
+
+VALUE_TOL = 0.75   # tolerância
+TRIER_DISCOUNT = 0.95  # 5% desconto
 
 
 # ----------------------------
 # Helpers
 # ----------------------------
-def strip_accents(s: str) -> str:
+def normalize_colname(x):
+    s = str(x).replace("\xa0", " ").strip().lower()
     s = unicodedata.normalize("NFKD", s)
-    return "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", s)
 
-def normalize_colname(x: str) -> str:
-    # remove NBSP, normaliza espaços, remove acentos, lowercase
-    s = str(x).replace("\xa0", " ").strip()
-    s = strip_accents(s)
-    s = re.sub(r"\s+", " ", s).strip().lower()
-    return s
 
-def normalize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_df_columns(df):
     df = df.copy()
     df.columns = [normalize_colname(c) for c in df.columns]
     return df
 
-def name_tokens(name: str) -> set:
-    if name is None:
-        return set()
-    s = strip_accents(str(name)).upper()
-    s = re.sub(r"[^A-Z0-9\s]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    toks = [t for t in s.split(" ") if len(t) >= 2]
-    return set(toks)
 
 def parse_brl_money(x):
-    if x is None:
+    if x is None or str(x).strip() == "":
         return None
-    if isinstance(x, (int, float)):
-        return float(x)
-    s = str(x).strip()
-    if s == "" or s == "-":
-        return None
-    # remove "R$", espaços e etc
-    s = s.replace("R$", "").replace(" ", "")
-    # milhar '.' e decimal ','
+    s = str(x).replace("R$", "").replace(" ", "")
     s = s.replace(".", "").replace(",", ".")
     try:
         return float(s)
-    except ValueError:
+    except:
         return None
+
 
 def format_brl(v):
-    if v is None or pd.isna(v):
-        return "-"
-    # formata 1234.5 -> "R$ 1.234,50"
-    s = f"{float(v):,.2f}"
-    s = s.replace(",", "X").replace(".", ",").replace("X", ".")
-    return f"R$ {s}"
+    if v is None:
+        return ""
+    return round(float(v), 2)
 
 def parse_date_br(x):
-    # tenta dd/mm/yyyy
-    if x is None or str(x).strip() == "":
+    if not x:
         return None
-    if isinstance(x, (datetime, pd.Timestamp)):
-        return pd.to_datetime(x).date()
-    s = str(x).strip()
-    d = pd.to_datetime(s, dayfirst=True, errors="coerce")
+    d = pd.to_datetime(x, dayfirst=True, errors="coerce")
     return None if pd.isna(d) else d.date()
 
-def token_match_score(tokens_a: set, tokens_b: set) -> int:
-    # score simples: quantas palavras em comum
-    if not tokens_a or not tokens_b:
-        return 0
-    return len(tokens_a.intersection(tokens_b))
-
-def parse_parcela_trier(x):
+def parse_parcela(x):
     """
-    "PARCELA 8/10" -> (8, "PARCELA 8/10")
-    "8/10" -> (8, "PARCELA 8/10")  (se vier sem a palavra)
+    1/5 -> (1, 5)
     """
-    if x is None:
-        return (None, None)
-    s = str(x).strip().upper()
-    if not s or s == "-":
+    if not x:
         return (None, None)
 
-    m = re.search(r"(\d+)\s*/\s*(\d+)", s)
-    if m:
-        n = int(m.group(1))
-        total = int(m.group(2))
-        return (n, f"PARCELA {n}/{total}")
-
-    # fallback: pega primeiro número
-    m = re.search(r"\d+", s)
-    if m:
-        n = int(m.group(0))
-        return (n, f"PARCELA {n}")
-    return (None, None)
-
-def parse_parcela_credcom(x):
-    """
-    7 -> (7, "PARCELA 7")
-    "7" -> (7, "PARCELA 7")
-    """
-    if x is None:
-        return (None, None)
-    s = str(x).strip()
-    if not s or s == "-":
-        return (None, None)
-    m = re.search(r"\d+", s)
+    m = re.search(r"(\d+)\s*/\s*(\d+)", str(x))
     if not m:
         return (None, None)
-    n = int(m.group(0))
-    return (n, f"PARCELA {n}")
 
-def build_row_key(filial, data_emissao, trier_nome, credcom_nome) -> str:
-    """Build a unique key for a row to preserve annotations"""
-    filial_str = "" if filial is None or pd.isna(filial) else str(int(filial))
-    data_str = data_emissao.strftime("%Y%m%d") if isinstance(data_emissao, (datetime, pd.Timestamp)) else str(data_emissao)
-    # Use combination of fields to create a stable key
-    return f"{filial_str}|{data_str}|{trier_nome}|{credcom_nome}"
+    return int(m.group(1)), int(m.group(2))
+
+
+def clean_cpf(x):
+    return re.sub(r"\D", "", str(x))
+
 
 # ----------------------------
-# Core: build output rows
+# Core logic
 # ----------------------------
-def build_conferencia_rows(df_trier: pd.DataFrame, df_cred: pd.DataFrame) -> list[list]:
-    # Normaliza nomes das colunas (evita "Valor " / NBSP / variações)
+def build_rows(df_trier, df_bg):
+
     t = normalize_df_columns(df_trier)
-    c = normalize_df_columns(df_cred)
+    b = normalize_df_columns(df_bg)
 
-    # Filial | Cliente | Data Emissão | Parcela | Valor
-    required_cols = ["filial", "cliente", "data emissao", "parcela", "valor"]
-    for col in required_cols:
-        if col not in t.columns:
-            raise ValueError(f"Coluna '{col}' não encontrada em {SHEET_TRIER}. Achei: {list(t.columns)}")
-        if col not in c.columns:
-            raise ValueError(f"Coluna '{col}' não encontrada em {SHEET_CREDCOM}. Achei: {list(c.columns)}")
+    # Standardize columns
+    for df in (t, b):
+        df["cpf"] = df["cpf"].apply(clean_cpf)
+        df["data_emissao"] = df["data"].apply(parse_date_br)
+        df["valor_parcela_num"] = df["valor parcela"].apply(parse_brl_money)
+        df["valor_total_num"] = df["valor total"].apply(parse_brl_money)
+        df[["parcela_n", "parcela_total"]] = df["parcela"].apply(
+            lambda x: pd.Series(parse_parcela(x))
+        )
 
-    t["filial"] = pd.to_numeric(t["filial"], errors="coerce").astype("Int64")
-    c["filial"] = pd.to_numeric(c["filial"], errors="coerce").astype("Int64")
+    used_bg = set()
+    out = []
 
-    t["Data_Emissao"] = t["data emissao"].apply(parse_date_br)
-    c["Data_Emissao"] = c["data emissao"].apply(parse_date_br)
+    for i, row_t in t.iterrows():
 
-    t["Valor_num"] = t["valor"].apply(parse_brl_money)
-    c["Valor_num"] = c["valor"].apply(parse_brl_money)
+        match_index = None
 
-    t["tokens"] = t["cliente"].apply(name_tokens)
-    c["tokens"] = c["cliente"].apply(name_tokens)
+        for j, row_b in b.iterrows():
 
-    # ----------------------------
-    # NEW: extrair parcela_num + texto de parcela para mostrar na conferência
-    # ----------------------------
-    # TRIER: "PARCELA 8/10" -> parcela_num=8, parcela_txt="PARCELA 8/10"
-    t[["parcela_num", "parcela_txt"]] = t["parcela"].apply(lambda x: pd.Series(parse_parcela_trier(x)))
-    # CREDCOM: "8" -> parcela_num=8, parcela_txt="PARCELA 8"
-    c[["parcela_num", "parcela_txt"]] = c["parcela"].apply(lambda x: pd.Series(parse_parcela_credcom(x)))
-
-    # remove linhas inválidas (sem filial ou data)
-    t = t.dropna(subset=["filial", "Data_Emissao"])
-    c = c.dropna(subset=["filial", "Data_Emissao"])
-
-    # agrupa por (Filial, Data)
-    out_rows = []
-
-    keys = sorted(
-        set(zip(t["filial"].astype(int), t["Data_Emissao"])) |
-        set(zip(c["filial"].astype(int), c["Data_Emissao"])),
-        key=lambda x: (x[1], x[0])  # (date, filial)
-    )
-
-    for filial, dt in keys:
-        tg = t[(t["filial"].astype(int) == filial) & (t["Data_Emissao"] == dt)].reset_index(drop=True)
-        cg = c[(c["filial"].astype(int) == filial) & (c["Data_Emissao"] == dt)].reset_index(drop=True)
-
-        used_c = set()
-
-        # Para cada TRIER, achar melhor CREDCOM não usado
-        for i in range(len(tg)):
-            best_j = None
-            best_score = 0
-
-            tp = tg.at[i, "parcela_num"]
-
-            for j in range(len(cg)):
-                if j in used_c:
-                    continue
-
-                cp = cg.at[j, "parcela_num"]
-
-                # NEW: se os dois tiverem parcela_num, exige que sejam iguais
-                if tp is not None and cp is not None:
-                    try:
-                        if int(tp) != int(cp):
-                            continue
-                    except Exception:
-                        # se der algum problema estranho, não bloqueia por parcela
-                        pass
-
-                score = token_match_score(tg.at[i, "tokens"], cg.at[j, "tokens"])
-                if score > best_score:
-                    best_score = score
-                    best_j = j
-
-            # precisa de pelo menos 2 palavras em comum
-            if best_j is not None and best_score >= 2:
-                used_c.add(best_j)
-
-                # NEW: incluir parcela no texto do cliente (TRIER mostra N/X; CREDCOM só número)
-                t_parc = tg.at[i, "parcela_txt"]
-                c_parc = cg.at[best_j, "parcela_txt"]
-
-                t_name = str(tg.at[i, "cliente"])
-                if t_parc:
-                    t_name = f"{t_name} — {t_parc}"
-
-                c_name = str(cg.at[best_j, "cliente"])
-                if c_parc:
-                    c_name = f"{c_name} — {c_parc}"
-
-                t_val = tg.at[i, "Valor_num"]
-                c_val = cg.at[best_j, "Valor_num"]
-
-                if (t_val is not None) and (c_val is not None) and abs(float(t_val) - float(c_val)) <= VALUE_TOL:
-                    status = "✅ OK"
-                else:
-                    status = "⚠️ VALOR DIVERGENTE"
-
-                out_rows.append({
-                    "filial": filial,
-                    "data": dt,
-                    "data_str": dt.strftime("%d/%m/%Y"),
-                    "trier_nome": t_name,
-                    "trier_val": t_val,
-                    "credcom_nome": c_name,
-                    "credcom_val": c_val,
-                    "status": status,
-                    "row_type": "matched"
-                })
-            else:
-                # sem match no CREDCOM
-                t_parc = tg.at[i, "parcela_txt"]
-                t_name = str(tg.at[i, "cliente"])
-                if t_parc:
-                    t_name = f"{t_name} — {t_parc}"
-
-                t_val = tg.at[i, "Valor_num"]
-                out_rows.append({
-                    "filial": filial,
-                    "data": dt,
-                    "data_str": dt.strftime("%d/%m/%Y"),
-                    "trier_nome": t_name,
-                    "trier_val": t_val,
-                    "credcom_nome": "-",
-                    "credcom_val": None,
-                    "status": "⚠️ SOMENTE TRIER",
-                    "row_type": "trier_only"
-                })
-
-        # sobrou CREDCOM sem par
-        for j in range(len(cg)):
-            if j in used_c:
+            if j in used_bg:
                 continue
 
-            c_parc = cg.at[j, "parcela_txt"]
-            c_name = str(cg.at[j, "cliente"])
-            if c_parc:
-                c_name = f"{c_name} — {c_parc}"
+            # CPF must match
+            if row_t["cpf"] != row_b["cpf"]:
+                continue
 
-            c_val = cg.at[j, "Valor_num"]
-            out_rows.append({
-                "filial": filial,
-                "data": dt,
-                "data_str": dt.strftime("%d/%m/%Y"),
-                "trier_nome": "-",
-                "trier_val": None,
-                "credcom_nome": c_name,
-                "credcom_val": c_val,
-                "status": "⚠️ SOMENTE CREDCOM",
-                "row_type": "credcom_only"
-            })
+            # parcela number must match
+            if row_t["parcela_n"] != row_b["parcela_n"]:
+                continue
 
-    return out_rows
+            # compare values with tolerance
+            # Apply 5% discount ONLY for comparison (do not modify displayed values)
+            bg_parcela_discounted = row_b["valor_parcela_num"] * 0.95
+            bg_total_discounted = row_b["valor_total_num"] * 0.95
+
+            if (
+                abs(row_t["valor_parcela_num"] - bg_parcela_discounted) <= VALUE_TOL
+                and
+                abs(row_t["valor_total_num"] - bg_total_discounted) <= VALUE_TOL
+            ):
+                match_index = j
+                break
+
+        # ---------- MATCH FOUND ----------
+        if match_index is not None:
+
+            used_bg.add(match_index)
+            row_b = b.loc[match_index]
+
+            # check total parcelas
+            if row_t["parcela_total"] != row_b["parcela_total"]:
+                status = "⚠️ NUM DE PARCELAS DIVERGENTES"
+            else:
+                status = "✅ OK"
+
+            trier_name = f'{row_t["cliente"]} — PARCELA {row_t["parcela_n"]}/{row_t["parcela_total"]}'
+            bg_name = f'{row_b["cliente"]} — PARCELA {row_b["parcela_n"]}/{row_b["parcela_total"]}'
+
+            out.append([
+                row_t["filial"],
+                row_t["data_emissao"].strftime("%d/%m/%Y"),
+                trier_name,
+                format_brl(row_t["valor_parcela_num"]),
+                format_brl(row_t["valor_total_num"]),
+                bg_name,
+                format_brl(row_b["valor_parcela_num"]),
+                format_brl(row_b["valor_total_num"]),
+                status,
+                ""
+            ])
+
+        # ---------- ONLY TRIER ----------
+        else:
+
+            trier_name = f'{row_t["cliente"]} — PARCELA {row_t["parcela_n"]}/{row_t["parcela_total"]}'
+
+            out.append([
+                row_t["filial"],
+                row_t["data_emissao"].strftime("%d/%m/%Y"),
+                trier_name,
+                format_brl(row_t["valor_parcela_num"]),
+                format_brl(row_t["valor_total_num"]),
+                "-",
+                "-",
+                "-",
+                "⚠️ SOMENTE TRIER",
+                ""
+            ])
+
+    # ---------- ONLY BGCARD ----------
+    for j, row_b in b.iterrows():
+        if j in used_bg:
+            continue
+
+        bg_name = f'{row_b["cliente"]} — PARCELA {row_b["parcela_n"]}/{row_b["parcela_total"]}'
+
+        out.append([
+            row_b["filial"],
+            row_b["data_emissao"].strftime("%d/%m/%Y"),
+            "-",
+            "-",
+            "-",
+            bg_name,
+            format_brl(row_b["valor_parcela_num"]),
+            format_brl(row_b["valor_total_num"]),
+            "⚠️ SOMENTE BGCARD",
+            ""
+        ])
+
+    return out
+
 
 # ----------------------------
-# Google Sheets I/O
+# Main
 # ----------------------------
-def upsert_worksheet(sh, title: str, rows: int = 2000, cols: int = 10):
-    try:
-        ws = sh.worksheet(title)
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=title, rows=rows, cols=cols)
-    return ws
-
-def ensure_sheet_size(ws, min_rows: int, min_cols: int):
-    if ws.row_count < min_rows:
-        ws.resize(rows=min_rows)
-    if ws.col_count < min_cols:
-        ws.resize(cols=min_cols)
-
-def read_existing_annotations(ws_out) -> dict:
-    """
-    Read the Anotações column and key by a combination of fields to preserve notes
-    """
-    values = ws_out.get_all_values()
-    if not values:
-        return {}
-
-    annotations = {}
-    for row in values[1:]:  # Skip header
-        row = row + [""] * (8 - len(row))  # Pad to 8 columns
-
-        filial_raw = (row[0] or "").strip()
-        try:
-            filial = int(filial_raw) if filial_raw not in ("", "-") else None
-        except ValueError:
-            filial = None
-            
-        data = row[1] if len(row) > 1 else ""
-        trier_nome = row[2] if len(row) > 2 else ""
-        credcom_nome = row[4] if len(row) > 4 else ""
-
-        # Create a key from the identifying fields
-        filial_str = "" if filial is None else str(filial)
-        key = f"{filial_str}|{data}|{trier_nome}|{credcom_nome}"
-
-        # Get annotation from column H (index 7)
-        anot = (row[7] or "").strip()
-        
-        if anot:
-            annotations[key] = anot
-
-    return annotations
-
-def write_values_chunked(ws, values, start_cell="A1", chunk_size=500):
-    for i in range(0, len(values), chunk_size):
-        chunk = values[i:i + chunk_size]
-        start_row = 1 + i
-        cell = f"A{start_row}"
-        ws.update(cell, chunk, value_input_option="RAW")
-
-def clear_leftover_rows(ws, start_row: int, end_row: int, end_col_letter: str):
-    """
-    Clears A{start_row}:{end_col}{end_row}
-    """
-    if end_row >= start_row:
-        ws.batch_clear([f"A{start_row}:{end_col_letter}{end_row}"])
-
 def main():
-    if not SPREADSHEET_ID:
-        raise ValueError("SPREADSHEET_ID não definido no ambiente.")
 
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+
     creds = Credentials.from_service_account_info(
         json.loads(os.environ["GSERVICE_JSON"]),
         scopes=scopes
@@ -375,84 +224,18 @@ def main():
     gc = gspread.authorize(creds)
     sh = gc.open_by_key(SPREADSHEET_ID)
 
-    ws_t = sh.worksheet(SHEET_TRIER)
-    ws_c = sh.worksheet(SHEET_CREDCOM)
+    df_trier = pd.DataFrame(sh.worksheet(SHEET_TRIER).get_all_records())
+    df_bg = pd.DataFrame(sh.worksheet(SHEET_BGCARD).get_all_records())
 
-    df_trier = pd.DataFrame(ws_t.get_all_records())
-    df_cred = pd.DataFrame(ws_c.get_all_records())
+    rows = build_rows(df_trier, df_bg)
 
-    items = build_conferencia_rows(df_trier, df_cred)
+    ws_out = sh.worksheet(SHEET_OUT) if SHEET_OUT in [w.title for w in sh.worksheets()] \
+        else sh.add_worksheet(title=SHEET_OUT, rows=2000, cols=10)
 
-    ws_out = upsert_worksheet(sh, SHEET_OUT, rows=max(2000, len(items) + 5), cols=10)
-    ensure_sheet_size(ws_out, min_rows=max(2000, len(items) + 5), min_cols=8)  # Updated to 8 columns
-
-    # Read existing annotations
-    annotations = read_existing_annotations(ws_out)
-
-    rows = []
-    for d in items:
-        # Create key for this row
-        filial = d["filial"]
-        data_str = d["data_str"]
-        trier_nome = d["trier_nome"]
-        credcom_nome = d["credcom_nome"]
-        
-        filial_str = "" if filial is None else str(filial)
-        key = f"{filial_str}|{data_str}|{trier_nome}|{credcom_nome}"
-        
-        # Get annotation if exists
-        anot = annotations.get(key, "")
-
-        trier_val_fmt = format_brl(d["trier_val"])
-        credcom_val_fmt = format_brl(d["credcom_val"]) if d["credcom_val"] is not None else "-"
-
-        rows.append([
-            filial if filial is not None else "-",
-            data_str,
-            trier_nome,
-            trier_val_fmt,
-            credcom_nome,
-            credcom_val_fmt,
-            d["status"],
-            anot  # Preserve annotation
-        ])
-
-    # Sort rows for consistent display
-    def sort_key(r):
-        d = pd.to_datetime(r[1], dayfirst=True, errors="coerce")
-        f = int(r[0]) if r[0] != "-" else 9999
-        return (d, f, str(r[2]), str(r[4]))
-
-    rows.sort(key=sort_key)
     values = [HEADER] + rows
+    ws_out.clear()
+    ws_out.update("A1", values, value_input_option="USER_ENTERED")
 
-    # Write new table
-    write_values_chunked(ws_out, values, chunk_size=500)
-
-    # Clear leftovers (if previous run had more rows)
-    prev_len = len(ws_out.get_all_values())
-    new_len = len(values)
-    if prev_len > new_len:
-        clear_leftover_rows(ws_out, start_row=new_len + 1, end_row=prev_len, end_col_letter="H")  # Updated to H
-
-    # Remove any existing data validation from STATUS column
-    try:
-        ws_out.clear_basic_filter()
-        requests = [{
-            "setDataValidation": {
-                "range": {
-                    "sheetId": ws_out.id,
-                    "startRowIndex": 0,
-                    "endRowIndex": ws_out.row_count,
-                    "startColumnIndex": 6,  # Column G (STATUS)
-                    "endColumnIndex": 7
-                },
-                "rule": None
-            }
-        }]
-        sh.batch_update({"requests": requests})
-    except Exception as e:
-        print(f"Note: Could not remove data validation: {e}")
 
 if __name__ == "__main__":
     main()
