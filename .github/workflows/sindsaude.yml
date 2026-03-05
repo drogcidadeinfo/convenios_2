@@ -27,31 +27,31 @@ jobs:
           python -m pip install --upgrade pip
           pip install selenium pandas openpyxl xlrd numpy gspread google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client packaging
       
-      #- name: download trier file 
-        #env:
-          #username: ${{ secrets.USERNAME }}
-          #password: ${{ secrets.PASSWORD }}
-        #run: python scripts/sindsaude/trier.py
-
-      #- name: process trier file
-        #env:
-          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        #run: python scripts/sindsaude/proc_trier.py 
-
-      - name: download bgcard file
+      - name: download trier file 
         env:
-          FL1: ${{ secrets.FL1 }}
-          FL2: ${{ secrets.FL2 }}
-          bgcard_password: ${{ secrets.BGCARD_PASSWORD }}
-          bgcard_num: ${{ secrets.BGCARD_NUM }}
-        run: python scripts/sindsaude/bgcard.py
+          username: ${{ secrets.USERNAME }}
+          password: ${{ secrets.PASSWORD }}
+        run: python scripts/sindsaude/trier.py
 
-      - name: process bgcard file
+      - name: process trier file
         env:
           GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python scripts/sindsaude/proc_bgcard.py 
+        run: python scripts/sindsaude/proc_trier.py 
+
+      #- name: download bgcard file
+        #env:
+          #FL1: ${{ secrets.FL1 }}
+          #FL2: ${{ secrets.FL2 }}
+          #bgcard_password: ${{ secrets.BGCARD_PASSWORD }}
+          #bgcard_num: ${{ secrets.BGCARD_NUM }}
+        #run: python scripts/sindsaude/bgcard.py
+
+      #- name: process bgcard file
+        #env:
+          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        #run: python scripts/sindsaude/proc_bgcard.py 
         
       #- name: process comb file
         #env:
