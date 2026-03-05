@@ -26,6 +26,19 @@ def get_all_files(directory=".", extensions=("csv", "xlsx")):
     return sorted(files, key=os.path.getmtime) if files else []
 
 
+def apply_5_percent_discount(value):
+    """Apply 5% discount to a value and round to 2 decimal places."""
+    if pd.notnull(value):
+        # Convert string with comma to float if necessary
+        if isinstance(value, str):
+            value = float(value.replace(',', '.'))
+        # Apply 5% discount (keep 95% of original value)
+        discounted_value = value * 0.95
+        # Round to 2 decimal places
+        return round(discounted_value, 2)
+    return value
+
+
 def clean_transfer_file(file_path: str) -> pd.DataFrame:
     logging.info(f"Reading: {os.path.basename(file_path)}")
     
@@ -46,21 +59,6 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
         }
         df = df.rename(columns=column_mapping)
         
-        # Clean and convert value columns
-        # Remove quotes if present and convert to float
-        '''for col in ['VALOR PARCELA', 'VALOR TOTAL']:
-            if col in df.columns:
-                # Remove quotes and convert comma to dot for decimal
-                # df[col] = df[col].astype(str).str.replace('"', '').str.replace('.', '').str.replace(',', '.').astype(float)
-                df[col] = (
-                    df[col]
-                    .astype(str)
-                    .str.replace('"', '', regex=False)
-                    .str.replace('.', '', regex=False)   # FIXED
-                    .str.replace(',', '.', regex=False)
-                    .astype(float)
-                )'''
-        
         # Ensure PARCELA is treated as string
         if 'PARCELA' in df.columns:
             df['PARCELA'] = df['PARCELA'].astype(str)
@@ -68,6 +66,13 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
         # Convert DATA to datetime and then to required format
         if 'DATA' in df.columns:
             df['DATA'] = pd.to_datetime(df['DATA'], format='%d/%m/%Y', errors='coerce')
+        
+        # Apply 5% discount to VALOR PARCELA and VALOR TOTAL
+        if 'VALOR PARCELA' in df.columns:
+            df['VALOR PARCELA'] = df['VALOR PARCELA'].apply(apply_5_percent_discount)
+        
+        if 'VALOR TOTAL' in df.columns:
+            df['VALOR TOTAL'] = df['VALOR TOTAL'].apply(apply_5_percent_discount)
         
         # Reorder columns to match expected structure
         expected_columns = ['DATA', 'CPF', 'CLIENTE', 'FILIAL', 'PARCELA', 'VALOR PARCELA', 'VALOR TOTAL']
@@ -77,6 +82,24 @@ def clean_transfer_file(file_path: str) -> pd.DataFrame:
         raise ValueError(f"Unsupported file format: {file_path}")
     
     return df
+
+
+def format_as_currency(value):
+    """Format a numeric value as Brazilian currency string."""
+    if pd.notnull(value) and value != "":
+        # Convert to float if it's a string
+        if isinstance(value, str):
+            try:
+                value = float(value.replace(',', '.'))
+            except ValueError:
+                return value
+        
+        # Format as Brazilian currency (R$ with comma as decimal separator)
+        # Using replace to change decimal point to comma
+        formatted = f"R$ {value:.2f}".replace('.', ',')
+        return formatted
+    return ""
+
 
 # -------------------------------------------------
 # Google Sheets update
@@ -97,9 +120,15 @@ def update_worksheet(df: pd.DataFrame, sheet_id: str, worksheet_name: str, clien
     df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce', dayfirst=True)
     df['DATA'] = df['DATA'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notnull(x) else "")
 
+    # Apply currency formatting to VALOR PARCELA and VALOR TOTAL
+    # First make a copy to avoid modifying the original
+    df_formatted = df.copy()
+    df_formatted['VALOR PARCELA'] = df_formatted['VALOR PARCELA'].apply(format_as_currency)
+    df_formatted['VALOR TOTAL'] = df_formatted['VALOR TOTAL'].apply(format_as_currency)
+
     # Monta a lista mantendo os tipos corretos
     data = []
-    for row in df.to_dict('records'):
+    for row in df_formatted.to_dict('records'):
         data.append([
             row['DATA'],
             row['CPF'],
