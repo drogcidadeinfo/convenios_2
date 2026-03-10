@@ -18,6 +18,7 @@ SHEET_TRIER = "dados_trier_sind"
 SHEET_BGCARD = "dados_bgcard"
 SHEET_OUT = "TRIERxSIND"
 
+# Updated header - added Anotações
 HEADER = [
     "Filial",
     "Data Emissão",
@@ -27,10 +28,20 @@ HEADER = [
     "BGCARD",
     "Valor Parcela",
     "Valor Total",
-    "STATUS"
+    "STATUS",
+    "Anotações"
 ]
 
 VALUE_TOL = 0.75   # tolerância
+
+# Color mapping for STATUS
+COLOR_MAP = {
+    "✅ OK": {"red": 0.8, "green": 0.9, "blue": 0.8},  # Light green
+    "⚠️ NUM DE PARCELAS DIVERGENTES": {"red": 1.0, "green": 0.8, "blue": 0.8},  # Light red
+    "⚠️ SOMENTE TRIER": {"red": 1.0, "green": 0.95, "blue": 0.8},  # Light yellow
+    "⚠️ SOMENTE BGCARD": {"red": 0.9, "green": 0.9, "blue": 1.0},  # Light blue
+    "⚠️ VALORES DIVERGENTES": {"red": 1.0, "green": 0.7, "blue": 0.7}  # Darker red for value mismatch
+}
 
 # Column mappings (original -> normalized) - expanded to handle variations
 COLUMN_MAPPING = {
@@ -137,7 +148,6 @@ def safe_float_convert(value):
         s = str(value).strip()
         
         # Remove currency symbol and thousand separators
-        # Using raw string to avoid escape sequence warning
         s = re.sub(r'[R$\s]', '', s)  # Remove R$, spaces
         s = s.replace('.', '')  # Remove thousand separators
         s = s.replace(',', '.')  # Replace decimal comma with dot
@@ -168,6 +178,96 @@ def format_value_for_json(val):
     return str(val)
 
 
+def normalize_cpf(x):
+    """Alias for clean_cpf for compatibility."""
+    return clean_cpf(x)
+
+
+def read_existing_annotations(ws_out) -> dict:
+    """
+    Read only the Anotações column, keyed by a composite key (CPF + Parcela)
+    """
+    values = ws_out.get_all_values()
+    if not values:
+        return {}
+
+    annotations = {}
+    for row in values[1:]:  # Skip header
+        row = row + [""] * (10 - len(row))
+
+        # Extract CPF from the BGCARD or TRIER column (they contain CPF in parentheses)
+        # Format is usually "Name — PARCELA X/Y (CPF)"
+        trier_text = row[2] or ""
+        bg_text = row[5] or ""
+        
+        # Try to extract CPF from either column
+        cpf_match = re.search(r'\((\d{3}\.\d{3}\.\d{3}-\d{2})\)', trier_text + " " + bg_text)
+        if not cpf_match:
+            continue
+            
+        cpf_digits = re.sub(r"\D", "", cpf_match.group(1))
+        
+        # Extract parcela info
+        parcela_match = re.search(r'PARCELA (\d+)/(\d+)', trier_text + " " + bg_text)
+        parcela_key = parcela_match.group(0) if parcela_match else "UNKNOWN"
+        
+        # Create composite key
+        composite_key = f"{cpf_digits}|{parcela_key}"
+
+        # Get annotation from column J (index 9)
+        anot = (row[9] or "").strip()
+        
+        # Store by composite key
+        if composite_key not in annotations and anot:
+            annotations[composite_key] = anot
+        elif anot and composite_key in annotations and not annotations[composite_key]:
+            annotations[composite_key] = anot
+
+    return annotations
+
+
+def apply_status_coloring(ws, num_rows: int):
+    """
+    Apply background color to STATUS column based on the status value
+    """
+    try:
+        requests = []
+        
+        # Get all status values to determine coloring
+        status_range = f"I2:I{num_rows + 1}"  # STATUS is now column I
+        status_values = ws.get(status_range)
+        
+        for i, row in enumerate(status_values, start=2):  # start from row 2 (after header)
+            if row and row[0] in COLOR_MAP:
+                color = COLOR_MAP[row[0]]
+                requests.append({
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "startRowIndex": i - 1,
+                            "endRowIndex": i,
+                            "startColumnIndex": 8,  # Column I (0-based)
+                            "endColumnIndex": 9
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "backgroundColor": color
+                            }
+                        },
+                        "fields": "userEnteredFormat.backgroundColor"
+                    }
+                })
+        
+        if requests:
+            # Batch update in chunks of 100 to avoid quota issues
+            for i in range(0, len(requests), 100):
+                chunk = requests[i:i + 100]
+                ws.spreadsheet.batch_update({"requests": chunk})
+                
+    except Exception as e:
+        print(f"Note: Could not apply status coloring: {e}")
+
+
 # ----------------------------
 # Core logic
 # ----------------------------
@@ -184,8 +284,6 @@ def build_rows(df_trier, df_bg):
     
     print(f"TRIER columns: {list(t.columns)}")
     print(f"BGCARD columns: {list(b.columns)}")
-    print(f"TRIER mapping: {t_cols}")
-    print(f"BGCARD mapping: {b_cols}")
     
     # Required columns with fallbacks
     required_cols = ['cpf', 'data', 'cliente', 'parcela', 'valor_parcela', 'valor_total', 'filial']
@@ -249,111 +347,179 @@ def build_rows(df_trier, df_bg):
 
     used_bg = set()
     out = []
+    
+    # Create lookup dictionary for BGCARD rows by CPF for faster matching
+    bg_by_cpf = {}
+    if not b.empty:
+        for j, row_b in b.iterrows():
+            cpf = row_b.get('cpf', '')
+            if cpf:
+                if cpf not in bg_by_cpf:
+                    bg_by_cpf[cpf] = []
+                bg_by_cpf[cpf].append(j)
 
     # Process TRIER rows
     if not t.empty:
         for i, row_t in t.iterrows():
-
+            trier_cpf = row_t.get('cpf', '')
+            
+            if not trier_cpf:
+                # Skip rows without CPF
+                continue
+                
             match_index = None
             best_match = None
             best_diff = float('inf')
-
-            for j, row_b in b.iterrows():
-
+            parcela_divergent_match = None
+            
+            # Get potential BGCARD matches for this CPF
+            potential_matches = bg_by_cpf.get(trier_cpf, [])
+            
+            for j in potential_matches:
                 if j in used_bg:
                     continue
-
-                # Skip if either has missing required data
-                if not row_t.get('cpf') or not row_b.get('cpf'):
-                    continue
-
-                # CPF must match
-                if str(row_t['cpf']) != str(row_b['cpf']):
-                    continue
-
-                # parcela number must match (if both have it)
+                    
+                row_b = b.loc[j]
+                
+                # MATCHING LOGIC: Check all fields except Filial and Cliente
+                
+                # Check parcela number (must match exactly if both have it)
+                parcela_match = True
                 if row_t.get('parcela_n') and row_b.get('parcela_n'):
                     try:
                         if int(row_t['parcela_n']) != int(row_b['parcela_n']):
-                            continue
+                            parcela_match = False
                     except (ValueError, TypeError):
-                        pass
-
-                # compare values with tolerance
+                        parcela_match = False
+                
+                # Check valor parcela with tolerance
                 val_t = row_t.get('valor_parcela_num', 0)
                 val_b = row_b.get('valor_parcela_num', 0)
+                valor_parcela_match = abs(val_t - val_b) <= VALUE_TOL
                 
-                diff = abs(val_t - val_b)
+                # Check valor total with tolerance
+                total_t = row_t.get('valor_total_num', 0)
+                total_b = row_b.get('valor_total_num', 0)
+                valor_total_match = abs(total_t - total_b) <= VALUE_TOL
                 
-                if diff <= VALUE_TOL:
-                    # Check total as well
-                    total_t = row_t.get('valor_total_num', 0)
-                    total_b = row_b.get('valor_total_num', 0)
-                    total_diff = abs(total_t - total_b)
-                    
-                    if total_diff <= VALUE_TOL:
-                        match_index = j
-                        break
-                    elif diff < best_diff:
-                        best_diff = diff
-                        best_match = j
-
-            # If exact match not found but we have a best match within tolerance
-            if match_index is None and best_match is not None:
-                match_index = best_match
+                # Calculate overall match score (for best match tracking)
+                total_diff = abs(total_t - total_b)
+                parcela_diff = abs(val_t - val_b)
+                combined_diff = total_diff + parcela_diff
+                
+                # Check for NUM DE PARCELAS DIVERGENTES case (CPF + Valor Total match, but parcela differs)
+                if valor_total_match and not parcela_match and trier_cpf == row_b.get('cpf', ''):
+                    if parcela_divergent_match is None or combined_diff < best_diff:
+                        parcela_divergent_match = j
+                        best_diff = combined_diff
+                
+                # Check for full match (all fields match)
+                if parcela_match and valor_parcela_match and valor_total_match:
+                    match_index = j
+                    break
+                elif combined_diff < best_diff:
+                    best_diff = combined_diff
+                    best_match = j
+            
+            # Priority: 1. Full match, 2. Parcela divergent match, 3. Best partial match
+            final_match_index = None
+            match_type = None
+            
+            if match_index is not None:
+                final_match_index = match_index
+                match_type = "full"
+            elif parcela_divergent_match is not None:
+                final_match_index = parcela_divergent_match
+                match_type = "parcela_divergent"
+            elif best_match is not None:
+                final_match_index = best_match
+                match_type = "partial"
 
             # ---------- MATCH FOUND ----------
-            if match_index is not None:
+            if final_match_index is not None:
+                used_bg.add(final_match_index)
+                row_b = b.loc[final_match_index]
 
-                used_bg.add(match_index)
-                row_b = b.loc[match_index]
-
-                # Format names safely
+                # Format names safely with CPF
                 trier_cliente = str(row_t.get('cliente_name', '')).strip()
                 bg_cliente = str(row_b.get('cliente_name', '')).strip()
+                
+                # Format CPF for display
+                cpf_display = trier_cpf
+                if len(cpf_display) == 11:
+                    cpf_display = f"{cpf_display[:3]}.{cpf_display[3:6]}.{cpf_display[6:9]}-{cpf_display[9:]}"
                 
                 trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
                 bg_parcela = f"{row_b.get('parcela_n', '?')}/{row_b.get('parcela_total', '?')}"
                 
-                trier_name = f"{trier_cliente} — PARCELA {trier_parcela}" if trier_cliente else f"PARCELA {trier_parcela}"
-                bg_name = f"{bg_cliente} — PARCELA {bg_parcela}" if bg_cliente else f"PARCELA {bg_parcela}"
+                trier_name = f"{trier_cliente} — PARCELA {trier_parcela} ({cpf_display})" if trier_cliente else f"PARCELA {trier_parcela} ({cpf_display})"
+                bg_name = f"{bg_cliente} — PARCELA {bg_parcela} ({cpf_display})" if bg_cliente else f"PARCELA {bg_parcela} ({cpf_display})"
 
-                # check total parcelas
-                if (row_t.get('parcela_total') and row_b.get('parcela_total') and
-                    str(row_t['parcela_total']) != str(row_b['parcela_total'])):
+                # Determine status based on match type
+                if match_type == "full":
+                    status = "✅ OK"
+                elif match_type == "parcela_divergent":
                     status = "⚠️ NUM DE PARCELAS DIVERGENTES"
                 else:
-                    status = "✅ OK"
+                    # Check if it's value mismatch
+                    val_t = row_t.get('valor_parcela_num', 0)
+                    val_b = row_b.get('valor_parcela_num', 0)
+                    total_t = row_t.get('valor_total_num', 0)
+                    total_b = row_b.get('valor_total_num', 0)
+                    
+                    if abs(val_t - val_b) > VALUE_TOL or abs(total_t - total_b) > VALUE_TOL:
+                        status = "⚠️ VALORES DIVERGENTES"
+                    else:
+                        status = "⚠️ MATCH PARCIAL"
 
-                out.append([
-                    format_value_for_json(row_t.get('filial', '')),
-                    row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
-                    trier_name,
-                    format_value_for_json(row_t.get('valor_parcela_num', 0)),
-                    format_value_for_json(row_t.get('valor_total_num', 0)),
-                    bg_name,
-                    format_value_for_json(row_b.get('valor_parcela_num', 0)),
-                    format_value_for_json(row_b.get('valor_total_num', 0)),
-                    status
-                ])
+                # For the output, we only show the BGCARD instance once
+                # We only output when we have a match and we're processing the TRIER row
+                # that corresponds to the parcela number in BGCARD
+                if match_type == "full" or match_type == "parcela_divergent":
+                    # Only output if this TRIER parcela matches the BGCARD parcela number
+                    # or if it's a parcela divergent case
+                    out.append([
+                        format_value_for_json(row_t.get('filial', '')),
+                        row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
+                        trier_name,
+                        format_value_for_json(row_t.get('valor_parcela_num', 0)),
+                        format_value_for_json(row_t.get('valor_total_num', 0)),
+                        bg_name,
+                        format_value_for_json(row_b.get('valor_parcela_num', 0)),
+                        format_value_for_json(row_b.get('valor_total_num', 0)),
+                        status,
+                        ""  # Placeholder for annotations
+                    ])
 
             # ---------- ONLY TRIER ----------
             else:
-                trier_cliente = str(row_t.get('cliente_name', '')).strip()
-                trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
-                trier_name = f"{trier_cliente} — PARCELA {trier_parcela}" if trier_cliente else f"PARCELA {trier_parcela}"
+                # Check if this CPF has ANY matches in BGCARD (for partial matching)
+                has_bg_matches = trier_cpf in bg_by_cpf
+                
+                if not has_bg_matches:
+                    # Only show as SOMENTE TRIER if there are no BGCARD records for this CPF at all
+                    trier_cliente = str(row_t.get('cliente_name', '')).strip()
+                    
+                    # Format CPF for display
+                    cpf_display = trier_cpf
+                    if len(cpf_display) == 11:
+                        cpf_display = f"{cpf_display[:3]}.{cpf_display[3:6]}.{cpf_display[6:9]}-{cpf_display[9:]}"
+                    
+                    trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
+                    trier_name = f"{trier_cliente} — PARCELA {trier_parcela} ({cpf_display})" if trier_cliente else f"PARCELA {trier_parcela} ({cpf_display})"
 
-                out.append([
-                    format_value_for_json(row_t.get('filial', '')),
-                    row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
-                    trier_name,
-                    format_value_for_json(row_t.get('valor_parcela_num', 0)),
-                    format_value_for_json(row_t.get('valor_total_num', 0)),
-                    "-",
-                    "-",
-                    "-",
-                    "⚠️ SOMENTE TRIER"
-                ])
+                    out.append([
+                        format_value_for_json(row_t.get('filial', '')),
+                        row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
+                        trier_name,
+                        format_value_for_json(row_t.get('valor_parcela_num', 0)),
+                        format_value_for_json(row_t.get('valor_total_num', 0)),
+                        "-",
+                        "-",
+                        "-",
+                        "⚠️ SOMENTE TRIER",
+                        ""  # Placeholder for annotations
+                    ])
 
     # ---------- ONLY BGCARD ----------
     if not b.empty:
@@ -362,8 +528,15 @@ def build_rows(df_trier, df_bg):
                 continue
 
             bg_cliente = str(row_b.get('cliente_name', '')).strip()
+            bg_cpf = row_b.get('cpf', '')
+            
+            # Format CPF for display
+            cpf_display = bg_cpf
+            if len(cpf_display) == 11:
+                cpf_display = f"{cpf_display[:3]}.{cpf_display[3:6]}.{cpf_display[6:9]}-{cpf_display[9:]}"
+            
             bg_parcela = f"{row_b.get('parcela_n', '?')}/{row_b.get('parcela_total', '?')}"
-            bg_name = f"{bg_cliente} — PARCELA {bg_parcela}" if bg_cliente else f"PARCELA {bg_parcela}"
+            bg_name = f"{bg_cliente} — PARCELA {bg_parcela} ({cpf_display})" if bg_cliente else f"PARCELA {bg_parcela} ({cpf_display})"
 
             out.append([
                 format_value_for_json(row_b.get('filial', '')),
@@ -374,7 +547,8 @@ def build_rows(df_trier, df_bg):
                 bg_name,
                 format_value_for_json(row_b.get('valor_parcela_num', 0)),
                 format_value_for_json(row_b.get('valor_total_num', 0)),
-                "⚠️ SOMENTE BGCARD"
+                "⚠️ SOMENTE BGCARD",
+                ""  # Placeholder for annotations
             ])
 
     return out
@@ -426,18 +600,42 @@ def main():
         # Get or create output worksheet
         try:
             ws_out = sh.worksheet(SHEET_OUT)
+            # Read existing annotations before clearing
+            annotations = read_existing_annotations(ws_out)
+            ws_out.clear()
         except gspread.WorksheetNotFound:
             ws_out = sh.add_worksheet(title=SHEET_OUT, rows=2000, cols=10)
+            annotations = {}
             print(f"Created new worksheet: {SHEET_OUT}")
 
-        # Clear existing content
-        ws_out.clear()
+        # Apply annotations to rows
+        for row in rows:
+            # Create composite key for annotation lookup
+            trier_text = row[2] if row[2] != "-" else ""
+            bg_text = row[5] if row[5] != "-" else ""
+            
+            # Extract CPF and parcela
+            cpf_match = re.search(r'\((\d{3}\.\d{3}\.\d{3}-\d{2})\)', trier_text + " " + bg_text)
+            parcela_match = re.search(r'PARCELA (\d+)/(\d+)', trier_text + " " + bg_text)
+            
+            if cpf_match and parcela_match:
+                cpf_digits = re.sub(r"\D", "", cpf_match.group(1))
+                parcela_key = parcela_match.group(0)
+                composite_key = f"{cpf_digits}|{parcela_key}"
+                
+                # Apply annotation if exists
+                if composite_key in annotations:
+                    row[9] = annotations[composite_key]  # Anotações column
         
         # Prepare values with header
         values = [HEADER] + rows
         
         # Update using correct parameter order (values first, then range)
         ws_out.update(values=values, range_name='A1')
+        
+        # Apply status coloring
+        if rows:
+            apply_status_coloring(ws_out, len(rows))
         
         print(f"Successfully updated {SHEET_OUT} with {len(rows)} rows")
 
