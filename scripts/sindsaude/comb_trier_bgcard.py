@@ -18,7 +18,7 @@ SHEET_TRIER = "dados_trier_sind"
 SHEET_BGCARD = "dados_bgcard"
 SHEET_OUT = "TRIERxSIND"
 
-# Updated header - added Anotações
+# Updated header
 HEADER = [
     "Filial",
     "Data Emissão",
@@ -32,7 +32,8 @@ HEADER = [
     "Anotações"
 ]
 
-VALUE_TOL = 0.75   # tolerância
+VALUE_TOL = 0.75   # tolerância para diferença de valores
+PARCELA_VALUE_TOL = 0.10  # tolerância menor para diferença entre parcelas do mesmo grupo
 
 # Color mapping for STATUS
 COLOR_MAP = {
@@ -178,6 +179,18 @@ def format_value_for_json(val):
     return str(val)
 
 
+def format_brl(v):
+    """Format value as Brazilian currency."""
+    if v is None or pd.isna(v) or v == "":
+        return "-"
+    try:
+        s = f"{float(v):,.2f}"
+        s = s.replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"R$ {s}"
+    except:
+        return "-"
+
+
 def normalize_cpf(x):
     """Alias for clean_cpf for compatibility."""
     return clean_cpf(x)
@@ -195,13 +208,12 @@ def read_existing_annotations(ws_out) -> dict:
     for row in values[1:]:  # Skip header
         row = row + [""] * (10 - len(row))
 
-        # Extract CPF from the BGCARD or TRIER column (they contain CPF in parentheses)
-        # Format is usually "Name — PARCELA X/Y (CPF)"
+        # Extract CPF and parcela from the text (without parentheses)
         trier_text = row[2] or ""
         bg_text = row[5] or ""
         
-        # Try to extract CPF from either column
-        cpf_match = re.search(r'\((\d{3}\.\d{3}\.\d{3}-\d{2})\)', trier_text + " " + bg_text)
+        # Extract CPF (without parentheses)
+        cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', trier_text + " " + bg_text)
         if not cpf_match:
             continue
             
@@ -209,8 +221,13 @@ def read_existing_annotations(ws_out) -> dict:
         
         # Extract parcela info
         parcela_match = re.search(r'PARCELA (\d+)/(\d+)', trier_text + " " + bg_text)
-        parcela_key = parcela_match.group(0) if parcela_match else "UNKNOWN"
-        
+        if not parcela_match:
+            continue
+            
+        parcela_num = parcela_match.group(1)
+        parcela_total = parcela_match.group(2)
+        parcela_key = f"{parcela_num}/{parcela_total}"
+
         # Create composite key
         composite_key = f"{cpf_digits}|{parcela_key}"
 
@@ -285,9 +302,6 @@ def build_rows(df_trier, df_bg):
     print(f"TRIER columns: {list(t.columns)}")
     print(f"BGCARD columns: {list(b.columns)}")
     
-    # Required columns with fallbacks
-    required_cols = ['cpf', 'data', 'cliente', 'parcela', 'valor_parcela', 'valor_total', 'filial']
-    
     # Standardize columns using mapped names
     for df_name, df, col_map in [("TRIER", t, t_cols), ("BGCARD", b, b_cols)]:
         if not df.empty:
@@ -335,6 +349,8 @@ def build_rows(df_trier, df_bg):
             cliente_col = col_map.get('cliente', 'cliente')
             if cliente_col in df.columns:
                 df['cliente_name'] = df[cliente_col].astype(str).str.strip()
+                # Clean up client name (remove extra spaces, normalize)
+                df['cliente_name'] = df['cliente_name'].apply(lambda x: re.sub(r'\s+', ' ', x).strip())
             else:
                 df['cliente_name'] = ""
             
@@ -346,9 +362,10 @@ def build_rows(df_trier, df_bg):
                 df['filial'] = ""
 
     used_bg = set()
+    used_trier = set()  # Track which TRIER rows we've used
     out = []
     
-    # Create lookup dictionary for BGCARD rows by CPF for faster matching
+    # Create lookup dictionary for BGCARD rows by CPF
     bg_by_cpf = {}
     if not b.empty:
         for j, row_b in b.iterrows():
@@ -358,185 +375,123 @@ def build_rows(df_trier, df_bg):
                     bg_by_cpf[cpf] = []
                 bg_by_cpf[cpf].append(j)
 
-    # Process TRIER rows
-    if not t.empty:
-        for i, row_t in t.iterrows():
-            trier_cpf = row_t.get('cpf', '')
+    # First, process matches based on parcela number
+    if not t.empty and not b.empty:
+        for j, row_b in b.iterrows():
+            bg_cpf = row_b.get('cpf', '')
+            bg_parcela_n = row_b.get('parcela_n')
+            bg_parcela_total = row_b.get('parcela_total')
             
-            if not trier_cpf:
-                # Skip rows without CPF
+            if not bg_cpf or not bg_parcela_n:
                 continue
                 
-            match_index = None
-            best_match = None
-            best_diff = float('inf')
-            parcela_divergent_match = None
+            # Find matching TRIER row with same CPF and same parcela number
+            matching_trier_idx = None
+            best_value_diff = float('inf')
             
-            # Get potential BGCARD matches for this CPF
-            potential_matches = bg_by_cpf.get(trier_cpf, [])
-            
-            for j in potential_matches:
-                if j in used_bg:
+            for i, row_t in t.iterrows():
+                if i in used_trier:
                     continue
                     
-                row_b = b.loc[j]
+                trier_cpf = row_t.get('cpf', '')
+                trier_parcela_n = row_t.get('parcela_n')
                 
-                # MATCHING LOGIC: Check all fields except Filial and Cliente
+                if trier_cpf != bg_cpf or trier_parcela_n != bg_parcela_n:
+                    continue
                 
-                # Check parcela number (must match exactly if both have it)
-                parcela_match = True
-                if row_t.get('parcela_n') and row_b.get('parcela_n'):
-                    try:
-                        if int(row_t['parcela_n']) != int(row_b['parcela_n']):
-                            parcela_match = False
-                    except (ValueError, TypeError):
-                        parcela_match = False
+                # Check if total parcelas match
+                trier_parcela_total = row_t.get('parcela_total')
+                total_parcelas_match = (trier_parcela_total == bg_parcela_total)
                 
-                # Check valor parcela with tolerance
+                # Check values with tolerance
                 val_t = row_t.get('valor_parcela_num', 0)
                 val_b = row_b.get('valor_parcela_num', 0)
-                valor_parcela_match = abs(val_t - val_b) <= VALUE_TOL
+                value_diff = abs(val_t - val_b)
                 
-                # Check valor total with tolerance
                 total_t = row_t.get('valor_total_num', 0)
                 total_b = row_b.get('valor_total_num', 0)
-                valor_total_match = abs(total_t - total_b) <= VALUE_TOL
-                
-                # Calculate overall match score (for best match tracking)
                 total_diff = abs(total_t - total_b)
-                parcela_diff = abs(val_t - val_b)
-                combined_diff = total_diff + parcela_diff
                 
-                # Check for NUM DE PARCELAS DIVERGENTES case (CPF + Valor Total match, but parcela differs)
-                if valor_total_match and not parcela_match and trier_cpf == row_b.get('cpf', ''):
-                    if parcela_divergent_match is None or combined_diff < best_diff:
-                        parcela_divergent_match = j
-                        best_diff = combined_diff
-                
-                # Check for full match (all fields match)
-                if parcela_match and valor_parcela_match and valor_total_match:
-                    match_index = j
+                # If values are within tolerance, this is a good match
+                if value_diff <= VALUE_TOL and total_diff <= VALUE_TOL:
+                    matching_trier_idx = i
                     break
-                elif combined_diff < best_diff:
-                    best_diff = combined_diff
-                    best_match = j
+                elif value_diff < best_value_diff:
+                    best_value_diff = value_diff
+                    matching_trier_idx = i
             
-            # Priority: 1. Full match, 2. Parcela divergent match, 3. Best partial match
-            final_match_index = None
-            match_type = None
-            
-            if match_index is not None:
-                final_match_index = match_index
-                match_type = "full"
-            elif parcela_divergent_match is not None:
-                final_match_index = parcela_divergent_match
-                match_type = "parcela_divergent"
-            elif best_match is not None:
-                final_match_index = best_match
-                match_type = "partial"
-
-            # ---------- MATCH FOUND ----------
-            if final_match_index is not None:
-                used_bg.add(final_match_index)
-                row_b = b.loc[final_match_index]
-
-                # Format names safely with CPF
+            if matching_trier_idx is not None:
+                used_bg.add(j)
+                used_trier.add(matching_trier_idx)
+                row_t = t.loc[matching_trier_idx]
+                
+                # Format names
                 trier_cliente = str(row_t.get('cliente_name', '')).strip()
                 bg_cliente = str(row_b.get('cliente_name', '')).strip()
-                
-                # Format CPF for display
-                cpf_display = trier_cpf
-                if len(cpf_display) == 11:
-                    cpf_display = f"{cpf_display[:3]}.{cpf_display[3:6]}.{cpf_display[6:9]}-{cpf_display[9:]}"
                 
                 trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
                 bg_parcela = f"{row_b.get('parcela_n', '?')}/{row_b.get('parcela_total', '?')}"
                 
-                trier_name = f"{trier_cliente} — PARCELA {trier_parcela} ({cpf_display})" if trier_cliente else f"PARCELA {trier_parcela} ({cpf_display})"
-                bg_name = f"{bg_cliente} — PARCELA {bg_parcela} ({cpf_display})" if bg_cliente else f"PARCELA {bg_parcela} ({cpf_display})"
+                trier_name = f"{trier_cliente} — PARCELA {trier_parcela}"
+                bg_name = f"{bg_cliente} — PARCELA {bg_parcela}"
 
-                # Determine status based on match type
-                if match_type == "full":
+                # Check status
+                if row_t.get('parcela_total') == row_b.get('parcela_total'):
                     status = "✅ OK"
-                elif match_type == "parcela_divergent":
-                    status = "⚠️ NUM DE PARCELAS DIVERGENTES"
                 else:
-                    # Check if it's value mismatch
-                    val_t = row_t.get('valor_parcela_num', 0)
-                    val_b = row_b.get('valor_parcela_num', 0)
-                    total_t = row_t.get('valor_total_num', 0)
-                    total_b = row_b.get('valor_total_num', 0)
-                    
-                    if abs(val_t - val_b) > VALUE_TOL or abs(total_t - total_b) > VALUE_TOL:
-                        status = "⚠️ VALORES DIVERGENTES"
-                    else:
-                        status = "⚠️ MATCH PARCIAL"
+                    status = "⚠️ NUM DE PARCELAS DIVERGENTES"
 
-                # For the output, we only show the BGCARD instance once
-                # We only output when we have a match and we're processing the TRIER row
-                # that corresponds to the parcela number in BGCARD
-                if match_type == "full" or match_type == "parcela_divergent":
-                    # Only output if this TRIER parcela matches the BGCARD parcela number
-                    # or if it's a parcela divergent case
-                    out.append([
-                        format_value_for_json(row_t.get('filial', '')),
-                        row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
-                        trier_name,
-                        format_value_for_json(row_t.get('valor_parcela_num', 0)),
-                        format_value_for_json(row_t.get('valor_total_num', 0)),
-                        bg_name,
-                        format_value_for_json(row_b.get('valor_parcela_num', 0)),
-                        format_value_for_json(row_b.get('valor_total_num', 0)),
-                        status,
-                        ""  # Placeholder for annotations
-                    ])
+                out.append([
+                    format_value_for_json(row_t.get('filial', '')),
+                    row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
+                    trier_name,
+                    format_brl(row_t.get('valor_parcela_num', 0)),
+                    format_brl(row_t.get('valor_total_num', 0)),
+                    bg_name,
+                    format_brl(row_b.get('valor_parcela_num', 0)),
+                    format_brl(row_b.get('valor_total_num', 0)),
+                    status,
+                    ""  # Placeholder for annotations
+                ])
 
-            # ---------- ONLY TRIER ----------
-            else:
-                # Check if this CPF has ANY matches in BGCARD (for partial matching)
-                has_bg_matches = trier_cpf in bg_by_cpf
+    # Process remaining TRIER rows (SOMENTE TRIER)
+    if not t.empty:
+        for i, row_t in t.iterrows():
+            if i in used_trier:
+                continue
                 
-                if not has_bg_matches:
-                    # Only show as SOMENTE TRIER if there are no BGCARD records for this CPF at all
-                    trier_cliente = str(row_t.get('cliente_name', '')).strip()
-                    
-                    # Format CPF for display
-                    cpf_display = trier_cpf
-                    if len(cpf_display) == 11:
-                        cpf_display = f"{cpf_display[:3]}.{cpf_display[3:6]}.{cpf_display[6:9]}-{cpf_display[9:]}"
-                    
-                    trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
-                    trier_name = f"{trier_cliente} — PARCELA {trier_parcela} ({cpf_display})" if trier_cliente else f"PARCELA {trier_parcela} ({cpf_display})"
+            trier_cpf = row_t.get('cpf', '')
+            
+            # Check if this CPF has ANY matches in BGCARD
+            has_bg_matches = trier_cpf in bg_by_cpf
+            
+            if not has_bg_matches:
+                trier_cliente = str(row_t.get('cliente_name', '')).strip()
+                trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
+                trier_name = f"{trier_cliente} — PARCELA {trier_parcela}"
 
-                    out.append([
-                        format_value_for_json(row_t.get('filial', '')),
-                        row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
-                        trier_name,
-                        format_value_for_json(row_t.get('valor_parcela_num', 0)),
-                        format_value_for_json(row_t.get('valor_total_num', 0)),
-                        "-",
-                        "-",
-                        "-",
-                        "⚠️ SOMENTE TRIER",
-                        ""  # Placeholder for annotations
-                    ])
+                out.append([
+                    format_value_for_json(row_t.get('filial', '')),
+                    row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
+                    trier_name,
+                    format_brl(row_t.get('valor_parcela_num', 0)),
+                    format_brl(row_t.get('valor_total_num', 0)),
+                    "-",
+                    "-",
+                    "-",
+                    "⚠️ SOMENTE TRIER",
+                    ""  # Placeholder for annotations
+                ])
 
-    # ---------- ONLY BGCARD ----------
+    # Process remaining BGCARD rows (SOMENTE BGCARD)
     if not b.empty:
         for j, row_b in b.iterrows():
             if j in used_bg:
                 continue
 
             bg_cliente = str(row_b.get('cliente_name', '')).strip()
-            bg_cpf = row_b.get('cpf', '')
-            
-            # Format CPF for display
-            cpf_display = bg_cpf
-            if len(cpf_display) == 11:
-                cpf_display = f"{cpf_display[:3]}.{cpf_display[3:6]}.{cpf_display[6:9]}-{cpf_display[9:]}"
-            
             bg_parcela = f"{row_b.get('parcela_n', '?')}/{row_b.get('parcela_total', '?')}"
-            bg_name = f"{bg_cliente} — PARCELA {bg_parcela} ({cpf_display})" if bg_cliente else f"PARCELA {bg_parcela} ({cpf_display})"
+            bg_name = f"{bg_cliente} — PARCELA {bg_parcela}"
 
             out.append([
                 format_value_for_json(row_b.get('filial', '')),
@@ -545,12 +500,22 @@ def build_rows(df_trier, df_bg):
                 "-",
                 "-",
                 bg_name,
-                format_value_for_json(row_b.get('valor_parcela_num', 0)),
-                format_value_for_json(row_b.get('valor_total_num', 0)),
+                format_brl(row_b.get('valor_parcela_num', 0)),
+                format_brl(row_b.get('valor_total_num', 0)),
                 "⚠️ SOMENTE BGCARD",
                 ""  # Placeholder for annotations
             ])
 
+    # Sort by Filial then CPF (extracted from name)
+    def sort_key(row):
+        filial = row[0]
+        # Extract CPF from TRIER or BGCARD name
+        name = row[2] if row[2] != "-" else row[5]
+        cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', name)
+        cpf = cpf_match.group(1) if cpf_match else ""
+        return (filial, cpf)
+    
+    out.sort(key=sort_key)
     return out
 
 
@@ -614,13 +579,13 @@ def main():
             trier_text = row[2] if row[2] != "-" else ""
             bg_text = row[5] if row[5] != "-" else ""
             
-            # Extract CPF and parcela
-            cpf_match = re.search(r'\((\d{3}\.\d{3}\.\d{3}-\d{2})\)', trier_text + " " + bg_text)
+            # Extract CPF and parcela (without parentheses)
+            cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', trier_text + " " + bg_text)
             parcela_match = re.search(r'PARCELA (\d+)/(\d+)', trier_text + " " + bg_text)
             
             if cpf_match and parcela_match:
                 cpf_digits = re.sub(r"\D", "", cpf_match.group(1))
-                parcela_key = parcela_match.group(0)
+                parcela_key = parcela_match.group(0).replace("PARCELA ", "")
                 composite_key = f"{cpf_digits}|{parcela_key}"
                 
                 # Apply annotation if exists
