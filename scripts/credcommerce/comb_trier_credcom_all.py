@@ -14,7 +14,7 @@ from google.oauth2.service_account import Credentials
 # ----------------------------
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 
-SHEET_CREDCOMMERCE = "dados_cred_commerce"  # Note: typo in your sheet name
+SHEET_CREDCOMMERCE = "dados_cred_commerce"
 SHEET_TRIER = "dados_trier"
 SHEET_OUT = "TRIERxCREDCOM"
 
@@ -29,8 +29,7 @@ HEADER = [
     "Anotações"
 ]
 
-VALUE_TOL = 0.75   # tolerância para diferença de valores
-TRIER_DISCOUNT = 0.95  # 5% desconto (TRIER já vem com desconto, Credcommerce sem)
+VALUE_TOL = 0.75  # tolerância para diferença de valores
 DATE_TOL_DAYS = 5  # tolerância de dias para considerar mesma compra
 
 # Color mapping for STATUS
@@ -40,19 +39,6 @@ COLOR_MAP = {
     "⚠️ SOMENTE CREDCOMMERCE": {"red": 0.9, "green": 0.9, "blue": 1.0},  # Light blue
     "⚠️ SOMENTE TRIER": {"red": 1.0, "green": 0.95, "blue": 0.8},  # Light yellow
     "⚠️ VALORES DIVERGENTES": {"red": 1.0, "green": 0.7, "blue": 0.7}  # Darker red for value mismatch
-}
-
-# Column mappings
-COLUMN_MAPPING = {
-    'filial': 'filial',
-    'cliente': 'cliente',
-    'data emissão': 'data',
-    'data_emissao': 'data',
-    'data': 'data',
-    'parcela': 'parcela',
-    'valor': 'valor_parcela',
-    'valor parcela': 'valor_parcela',
-    'valor_parcela': 'valor_parcela'
 }
 
 
@@ -70,25 +56,13 @@ def normalize_colname(x):
 
 
 def normalize_df_columns(df):
-    """Normalize DataFrame columns and map to expected names."""
+    """Normalize DataFrame columns."""
     if df.empty:
-        return df, {}
+        return df
     
     df = df.copy()
-    
-    # First normalize all column names
-    normalized_cols = [normalize_colname(c) for c in df.columns]
-    df.columns = normalized_cols
-    
-    # Then map to expected column names if they match our patterns
-    expected_cols = {}
-    for expected, normalized in COLUMN_MAPPING.items():
-        for col in normalized_cols:
-            if expected in col or normalized in col:
-                expected_cols[normalized] = col
-                break
-    
-    return df, expected_cols
+    df.columns = [normalize_colname(c) for c in df.columns]
+    return df
 
 
 def parse_date_br(x):
@@ -96,12 +70,10 @@ def parse_date_br(x):
     if not x or pd.isna(x) or x == "":
         return None
     try:
-        # Handle different date formats
         if isinstance(x, str):
-            # Try common Brazilian formats
             for fmt in ['%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d']:
                 try:
-                    d = datetime.strptime(x, fmt)
+                    d = datetime.strptime(x.strip(), fmt)
                     return d.date()
                 except ValueError:
                     continue
@@ -111,28 +83,32 @@ def parse_date_br(x):
         return None
 
 
-def parse_parcela(x):
+def parse_parcela_cred(x):
     """
-    Parse parcel format like "1/5" or "PARCELA 1/5" -> (1, 5)
+    Parse Credcommerce parcel format: just the number "1" -> (1, None)
     """
     if not x or pd.isna(x) or x == "":
         return (None, None)
-
-    # Handle "PARCELA 1/5" format
-    x = str(x).replace("PARCELA", "").strip()
     
+    try:
+        return (int(str(x).strip()), None)
+    except:
+        return (None, None)
+
+
+def parse_parcela_trier(x):
+    """
+    Parse TRIER parcel format: "PARCELA 1/5" -> (1, 5)
+    """
+    if not x or pd.isna(x) or x == "":
+        return (None, None)
+    
+    x = str(x).replace("PARCELA", "").strip()
     m = re.search(r"(\d+)\s*[\/\-]\s*(\d+)", str(x))
     if not m:
         return (None, None)
-
+    
     return int(m.group(1)), int(m.group(2))
-
-
-def clean_cpf(x):
-    """Remove non-digits from CPF."""
-    if pd.isna(x) or x == "":
-        return ""
-    return re.sub(r"\D", "", str(x))
 
 
 def safe_float_convert(value):
@@ -141,17 +117,13 @@ def safe_float_convert(value):
         return 0.0
     
     try:
-        # If already numeric, return as float
         if isinstance(value, (int, float)):
             return float(value)
         
-        # Convert to string and clean
         s = str(value).strip()
-        
-        # Remove currency symbol and thousand separators
-        s = re.sub(r'[R$\s]', '', s)  # Remove R$, spaces
-        s = s.replace('.', '')  # Remove thousand separators
-        s = s.replace(',', '.')  # Replace decimal comma with dot
+        s = re.sub(r'[R$\s]', '', s)
+        s = s.replace('.', '')
+        s = s.replace(',', '.')
         
         return float(s)
     except (ValueError, TypeError):
@@ -168,20 +140,19 @@ def safe_get_worksheet(sh, sheet_name):
 
 
 def format_value_for_json(val):
-    """Format value to be JSON serializable (no NaN, Infinity)."""
+    """Format value to be JSON serializable."""
     if pd.isna(val) or val is None or val == "":
         return ""
     if isinstance(val, float) and (np.isnan(val) or np.isinf(val)):
         return 0.0
     if isinstance(val, (int, float)):
-        # Round to 2 decimal places for currency
         return round(float(val), 2)
     return str(val)
 
 
 def format_brl(v):
     """Format value as Brazilian currency."""
-    if v is None or pd.isna(v) or v == "":
+    if v is None or pd.isna(v) or v == "" or v == 0:
         return "-"
     try:
         s = f"{float(v):,.2f}"
@@ -192,66 +163,57 @@ def format_brl(v):
 
 
 def read_existing_annotations(ws_out) -> dict:
-    """
-    Read only the Anotações column, keyed by a composite key (CPF + Parcela + Valor)
-    """
-    values = ws_out.get_all_values()
+    """Read existing annotations from output sheet."""
+    try:
+        values = ws_out.get_all_values()
+    except:
+        return {}
+        
     if not values:
         return {}
 
     annotations = {}
     for row in values[1:]:  # Skip header
         row = row + [""] * (8 - len(row))
-
-        # Extract CPF and parcela from the text
+        
+        # Use composite key based on Filial, Data, and Valor to identify the row
+        filial = row[0]
+        data = row[1]
         cred_text = row[2] or ""
         trier_text = row[4] or ""
         
-        # Extract CPF from either column
+        # Extract parcela and valor from either side
         combined_text = cred_text + " " + trier_text
-        cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', combined_text)
-        if not cpf_match:
-            continue
-            
-        cpf_digits = re.sub(r"\D", "", cpf_match.group(1))
-        
-        # Extract parcela info
         parcela_match = re.search(r'PARCELA (\d+)/(\d+)', combined_text)
         if not parcela_match:
-            continue
-            
-        parcela_num = parcela_match.group(1)
-        parcela_total = parcela_match.group(2)
-        parcela_key = f"{parcela_num}/{parcela_total}"
+            parcela_match = re.search(r'— PARCELA (\d+)', combined_text)
         
-        # Get valor to help identify the purchase
-        valor = row[3] if row[3] != "-" else row[5]  # CREDCOMMERCE valor or TRIER valor
-
-        # Create composite key
-        composite_key = f"{cpf_digits}|{parcela_key}|{valor}"
+        valor = row[3] if row[3] != "-" else row[5]
+        
+        if parcela_match:
+            parcela_key = parcela_match.group(0)
+            composite_key = f"{filial}|{data}|{parcela_key}|{valor}"
+        else:
+            composite_key = f"{filial}|{data}|{combined_text}|{valor}"
 
         # Get annotation from column H (index 7)
         anot = (row[7] or "").strip()
         
-        # Store by composite key
-        if composite_key not in annotations and anot:
+        if anot:
             annotations[composite_key] = anot
 
     return annotations
 
 
 def apply_status_coloring(ws, num_rows: int):
-    """
-    Apply background color to STATUS column based on the status value
-    """
+    """Apply background color to STATUS column."""
     try:
         requests = []
         
-        # Get all status values to determine coloring
-        status_range = f"G2:G{num_rows + 1}"  # STATUS is column G
+        status_range = f"G2:G{num_rows + 1}"
         status_values = ws.get(status_range)
         
-        for i, row in enumerate(status_values, start=2):  # start from row 2 (after header)
+        for i, row in enumerate(status_values, start=2):
             if row and row[0] in COLOR_MAP:
                 color = COLOR_MAP[row[0]]
                 requests.append({
@@ -260,7 +222,7 @@ def apply_status_coloring(ws, num_rows: int):
                             "sheetId": ws.id,
                             "startRowIndex": i - 1,
                             "endRowIndex": i,
-                            "startColumnIndex": 6,  # Column G (0-based)
+                            "startColumnIndex": 6,
                             "endColumnIndex": 7
                         },
                         "cell": {
@@ -273,7 +235,6 @@ def apply_status_coloring(ws, num_rows: int):
                 })
         
         if requests:
-            # Batch update in chunks of 100 to avoid quota issues
             for i in range(0, len(requests), 100):
                 chunk = requests[i:i + 100]
                 ws.spreadsheet.batch_update({"requests": chunk})
@@ -282,35 +243,41 @@ def apply_status_coloring(ws, num_rows: int):
         print(f"Note: Could not apply status coloring: {e}")
 
 
-def group_parcels_by_purchase(df, source='trier'):
+def group_purchases_by_value_and_parcelas(df, source='cred'):
     """
-    Group rows by purchase (CPF + approximate date + value pattern)
-    For Credcommerce, we don't have valor total, so we group by valor parcela pattern
+    Group rows into purchases based on Filial, approximate date, and value pattern.
+    Returns a dictionary with purchase keys and lists of indices.
     """
     purchases = {}
     
     for idx, row in df.iterrows():
-        cpf = row.get('cpf', '')
-        valor_parcela = row.get('valor_parcela_num', 0)
+        filial = row.get('filial', '')
         data = row.get('data_emissao')
-        parcela_total = row.get('parcela_total')
+        valor = row.get('valor_parcela_num', 0)
         
-        if not cpf or not data or not parcela_total:
+        if source == 'cred':
+            parcela_n = row.get('parcela_n_cred')
+            # For Credcommerce, we don't know total parcels from a single row
+            # We'll need to group by filial, date, and value
+        else:  # trier
+            parcela_n = row.get('parcela_n_trier')
+            parcela_total = row.get('parcela_total_trier')
+        
+        if not filial or not data or not valor:
             continue
-            
-        # Estimate total value based on parcel value and total parcels
-        estimated_total = valor_parcela * parcela_total
         
-        # Find matching purchase group
+        # Create a key based on filial and rounded value
+        valor_rounded = round(valor, 2)
+        
+        # Look for matching purchase group
         found_group = False
-        for purchase_key in purchases.keys():
-            p_cpf, p_data, p_parcela_total, p_estimated = purchase_key.split('|')
-            p_data = datetime.strptime(p_data, '%Y-%m-%d').date()
-            p_estimated = float(p_estimated)
+        for purchase_key in list(purchases.keys()):
+            p_filial, p_data_str, p_valor = purchase_key.split('|')
+            p_valor = float(p_valor)
+            p_data = datetime.strptime(p_data_str, '%Y-%m-%d').date()
             
-            if (cpf == p_cpf and 
-                parcela_total == int(p_parcela_total) and
-                abs(estimated_total - p_estimated) <= (VALUE_TOL * parcela_total) and
+            if (filial == p_filial and 
+                abs(valor_rounded - p_valor) <= VALUE_TOL and
                 abs((data - p_data).days) <= DATE_TOL_DAYS):
                 
                 purchases[purchase_key].append(idx)
@@ -318,8 +285,7 @@ def group_parcels_by_purchase(df, source='trier'):
                 break
         
         if not found_group:
-            # Create new purchase group
-            purchase_key = f"{cpf}|{data.isoformat()}|{parcela_total}|{estimated_total}"
+            purchase_key = f"{filial}|{data.isoformat()}|{valor_rounded}"
             purchases[purchase_key] = [idx]
     
     return purchases
@@ -335,248 +301,186 @@ def build_rows(df_cred, df_trier):
     if df_cred.empty and df_trier.empty:
         return []
     
-    # Normalize DataFrames and get column mappings
-    c, c_cols = normalize_df_columns(df_cred)
-    t, t_cols = normalize_df_columns(df_trier)
+    # Normalize DataFrames
+    c = normalize_df_columns(df_cred)
+    t = normalize_df_columns(df_trier)
     
     print(f"CREDCOMMERCE columns: {list(c.columns)}")
     print(f"TRIER columns: {list(t.columns)}")
     
-    # Standardize columns
-    for df_name, df, col_map in [("CREDCOMMERCE", c, c_cols), ("TRIER", t, t_cols)]:
-        if not df.empty:
-            # Filial
-            filial_col = col_map.get('filial', 'filial')
-            if filial_col in df.columns:
-                df['filial'] = df[filial_col].astype(str).str.strip()
-            else:
-                df['filial'] = ""
-            
-            # Cliente
-            cliente_col = col_map.get('cliente', 'cliente')
-            if cliente_col in df.columns:
-                df['cliente_name'] = df[cliente_col].astype(str).str.strip()
-                df['cliente_name'] = df['cliente_name'].apply(lambda x: re.sub(r'\s+', ' ', x).strip())
-            else:
-                df['cliente_name'] = ""
-            
-            # Data
-            data_col = col_map.get('data', 'data')
-            if data_col in df.columns:
-                df['data_emissao'] = df[data_col].apply(parse_date_br)
-            else:
-                df['data_emissao'] = None
-            
-            # Parcela
-            parcela_col = col_map.get('parcela', 'parcela')
-            if parcela_col in df.columns:
-                df[['parcela_n', 'parcela_total']] = df[parcela_col].apply(
-                    lambda x: pd.Series(parse_parcela(x))
-                )
-            else:
-                df['parcela_n'] = None
-                df['parcela_total'] = None
-            
-            # Valor Parcela
-            valor_col = col_map.get('valor_parcela', 'valor_parcela')
-            if valor_col in df.columns:
-                df['valor_parcela_num'] = df[valor_col].apply(safe_float_convert)
-            else:
-                print(f"Warning: {df_name} missing 'valor_parcela' column, using 0")
-                df['valor_parcela_num'] = 0.0
-            
-            # CPF - Try to extract from cliente name if not present
-            if 'cpf' not in df.columns:
-                # Try to extract CPF from cliente column
-                df['cpf'] = df['cliente_name'].apply(lambda x: clean_cpf(x) if x else "")
-            else:
-                df['cpf'] = df['cpf'].apply(clean_cpf)
-
-    # Group TRIER rows by purchase
-    trier_purchases = group_parcels_by_purchase(t, 'trier') if not t.empty else {}
+    # Process CREDCOMMERCE data
+    if not c.empty:
+        c['filial'] = c['filial'].astype(str).str.strip()
+        c['cliente_name'] = c['cliente'].astype(str).str.strip()
+        c['data_emissao'] = c['data emissao'].apply(parse_date_br)
+        c['valor_parcela_num'] = c['valor'].apply(safe_float_convert)
+        
+        # Parse parcela for Credcommerce (just the number)
+        c[['parcela_n_cred', 'parcela_total_cred']] = c['parcela'].apply(
+            lambda x: pd.Series(parse_parcela_cred(x))
+        )
+        
+        # Drop rows with missing essential data
+        c = c.dropna(subset=['filial', 'data_emissao', 'parcela_n_cred'])
     
-    # Group CREDCOMMERCE rows by purchase
-    cred_purchases = group_parcels_by_purchase(c, 'cred') if not c.empty else {}
+    # Process TRIER data
+    if not t.empty:
+        t['filial'] = t['filial'].astype(str).str.strip()
+        t['cliente_name'] = t['cliente'].astype(str).str.strip()
+        t['data_emissao'] = t['data emissao'].apply(parse_date_br)
+        t['valor_parcela_num'] = t['valor'].apply(safe_float_convert)
+        
+        # Parse parcela for TRIER (with total)
+        t[['parcela_n_trier', 'parcela_total_trier']] = t['parcela'].apply(
+            lambda x: pd.Series(parse_parcela_trier(x))
+        )
+        
+        # Drop rows with missing essential data
+        t = t.dropna(subset=['filial', 'data_emissao', 'parcela_n_trier', 'parcela_total_trier'])
     
-    # Track used purchases
-    used_trier_purchases = set()
-    used_cred_purchases = set()
+    # Group purchases
+    cred_purchases = group_purchases_by_value_and_parcelas(c, 'cred') if not c.empty else {}
+    trier_purchases = group_purchases_by_value_and_parcelas(t, 'trier') if not t.empty else {}
+    
+    # Track used rows
+    used_cred_indices = set()
+    used_trier_indices = set()
     out = []
     
-    # Process each CREDCOMMERCE purchase and find matching TRIER purchase
-    if not c.empty:
-        for cred_key, cred_indices in cred_purchases.items():
-            # Get first row of the purchase (all have same data)
-            cred_idx = cred_indices[0]
-            row_c = c.loc[cred_idx]
-            
-            cred_cpf = row_c.get('cpf', '')
-            cred_parcela_total = row_c.get('parcela_total')
-            cred_data = row_c.get('data_emissao')
-            
-            if not cred_cpf or not cred_data:
+    # First, match purchases based on filial, date, and value
+    for cred_key, cred_indices in cred_purchases.items():
+        cred_filial, cred_data_str, cred_valor = cred_key.split('|')
+        cred_data = datetime.strptime(cred_data_str, '%Y-%m-%d').date()
+        cred_valor = float(cred_valor)
+        
+        # Find matching TRIER purchase
+        best_match_key = None
+        best_match_diff = float('inf')
+        
+        for trier_key, trier_indices in trier_purchases.items():
+            if all(idx in used_trier_indices for idx in trier_indices):
                 continue
                 
-            # Find matching TRIER purchase
-            matching_trier_key = None
-            best_match_score = float('inf')
+            t_filial, t_data_str, t_valor = trier_key.split('|')
+            t_data = datetime.strptime(t_data_str, '%Y-%m-%d').date()
+            t_valor = float(t_valor)
             
-            for trier_key, trier_indices in trier_purchases.items():
-                if trier_key in used_trier_purchases:
-                    continue
-                    
-                t_idx = trier_indices[0]  # First row of the purchase
-                row_t = t.loc[t_idx]
-                
-                t_cpf, t_data, t_parcela_total, t_estimated = trier_key.split('|')
-                t_data = datetime.strptime(t_data, '%Y-%m-%d').date()
-                
-                # Check if CPF matches
-                if cred_cpf != t_cpf:
-                    continue
-                
-                # Check if total parcels match (approximate)
-                if cred_parcela_total != int(t_parcela_total):
-                    continue
-                
-                # Check if date is within tolerance
-                date_diff = abs((cred_data - t_data).days)
-                if date_diff > DATE_TOL_DAYS:
-                    continue
-                
-                # Check values with discount
-                # TRIER already has discount, CREDCOMMERCE doesn't
-                # So we compare: TRIER value ≈ CREDCOMMERCE value * 0.95
-                cred_valor = row_c.get('valor_parcela_num', 0)
-                cred_valor_discounted = cred_valor * TRIER_DISCOUNT
-                
-                # Calculate average value difference across all parcels
-                total_diff = 0
-                for t_idx in trier_indices:
-                    row_t = t.loc[t_idx]
-                    t_valor = row_t.get('valor_parcela_num', 0)
-                    diff = abs(t_valor - cred_valor_discounted)
-                    total_diff += diff
-                
-                avg_diff = total_diff / len(trier_indices) if trier_indices else float('inf')
-                
-                if avg_diff < best_match_score:
-                    best_match_score = avg_diff
-                    matching_trier_key = trier_key
+            # Check filial match
+            if cred_filial != t_filial:
+                continue
             
-            if matching_trier_key and best_match_score <= VALUE_TOL:
-                # Found a matching purchase
-                used_cred_purchases.add(cred_key)
-                used_trier_purchases.add(matching_trier_key)
-                
-                trier_indices = trier_purchases[matching_trier_key]
-                
-                # Create a map of parcela numbers to TRIER rows
-                trier_parcela_map = {}
-                for idx in trier_indices:
-                    row_t = t.loc[idx]
-                    parcela_n = row_t.get('parcela_n')
-                    if parcela_n:
-                        trier_parcela_map[parcela_n] = idx
-                
-                # For each CREDCOMMERCE row in this purchase, find matching TRIER row
-                for cred_idx in cred_indices:
-                    row_c = c.loc[cred_idx]
-                    cred_parcela_n = row_c.get('parcela_n')
-                    
-                    # Find matching TRIER row with same parcela number
-                    matching_trier_idx = trier_parcela_map.get(cred_parcela_n)
-                    
-                    if matching_trier_idx is not None:
-                        row_t = t.loc[matching_trier_idx]
-                        
-                        # Format names
-                        cred_cliente = str(row_c.get('cliente_name', '')).strip()
-                        t_cliente = str(row_t.get('cliente_name', '')).strip()
-                        
-                        # Extract CPF for display (if present in name)
-                        cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', cred_cliente + " " + t_cliente)
-                        cpf_display = f" ({cpf_match.group(1)})" if cpf_match else ""
-                        
-                        cred_name = f"{cred_cliente} — PARCELA {cred_parcela_n}/{cred_parcela_total}{cpf_display}"
-                        t_name = f"{t_cliente} — PARCELA {row_t.get('parcela_n')}/{row_t.get('parcela_total')}{cpf_display}"
-                        
-                        # Check if all parcels are present
-                        if len(cred_indices) == len(trier_indices):
-                            status = "✅ OK"
-                        else:
-                            status = "⚠️ NUM DE PARCELAS DIVERGENTES"
-                        
-                        out.append([
-                            format_value_for_json(row_c.get('filial', '')),
-                            row_c['data_emissao'].strftime("%d/%m/%Y") if row_c.get('data_emissao') else '',
-                            cred_name,
-                            format_brl(row_c.get('valor_parcela_num', 0)),
-                            t_name,
-                            format_brl(row_t.get('valor_parcela_num', 0)),
-                            status,
-                            ""  # Placeholder for annotations
-                        ])
+            # Check date within tolerance
+            if abs((cred_data - t_data).days) > DATE_TOL_DAYS:
+                continue
+            
+            # Check value within tolerance
+            if abs(cred_valor - t_valor) <= VALUE_TOL:
+                # This is a potential match
+                if abs(cred_valor - t_valor) < best_match_diff:
+                    best_match_diff = abs(cred_valor - t_valor)
+                    best_match_key = trier_key
+        
+        if best_match_key:
+            # Found a matching purchase
+            trier_indices = trier_purchases[best_match_key]
+            
+            # Create maps for quick lookup
+            cred_parcela_map = {c.loc[idx, 'parcela_n_cred']: idx for idx in cred_indices}
+            trier_parcela_map = {t.loc[idx, 'parcela_n_trier']: idx for idx in trier_indices}
+            
+            # Check if number of parcels match
+            if len(cred_indices) == len(trier_indices):
+                status_base = "✅ OK"
             else:
-                # No matching purchase found in TRIER
-                for cred_idx in cred_indices:
-                    row_c = c.loc[cred_idx]
+                status_base = "⚠️ NUM DE PARCELAS DIVERGENTES"
+            
+            # Match each CREDCOMMERCE row with corresponding TRIER row
+            for cred_idx in cred_indices:
+                row_c = c.loc[cred_idx]
+                cred_parcela_n = row_c['parcela_n_cred']
+                
+                # Find matching TRIER row with same parcela number
+                if cred_parcela_n in trier_parcela_map:
+                    trier_idx = trier_parcela_map[cred_parcela_n]
+                    row_t = t.loc[trier_idx]
                     
-                    cred_cliente = str(row_c.get('cliente_name', '')).strip()
-                    cred_parcela_n = row_c.get('parcela_n')
-                    cred_parcela_total = row_c.get('parcela_total')
+                    # Mark as used
+                    used_cred_indices.add(cred_idx)
+                    used_trier_indices.add(trier_idx)
                     
-                    # Extract CPF for display
-                    cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', cred_cliente)
-                    cpf_display = f" ({cpf_match.group(1)})" if cpf_match else ""
-                    
-                    cred_name = f"{cred_cliente} — PARCELA {cred_parcela_n}/{cred_parcela_total}{cpf_display}"
+                    # Format names
+                    cred_name = f"{row_c['cliente_name']} — PARCELA {cred_parcela_n}"
+                    trier_name = f"{row_t['cliente_name']} — PARCELA {row_t['parcela_n_trier']}/{row_t['parcela_total_trier']}"
                     
                     out.append([
-                        format_value_for_json(row_c.get('filial', '')),
-                        row_c['data_emissao'].strftime("%d/%m/%Y") if row_c.get('data_emissao') else '',
+                        row_c['filial'],
+                        row_c['data_emissao'].strftime("%d/%m/%Y"),
                         cred_name,
-                        format_brl(row_c.get('valor_parcela_num', 0)),
-                        "-",
-                        "-",
-                        "⚠️ SOMENTE CREDCOMMERCE",
+                        format_brl(row_c['valor_parcela_num']),
+                        trier_name,
+                        format_brl(row_t['valor_parcela_num']),
+                        status_base,
                         ""  # Placeholder for annotations
                     ])
+            
+            # Add any unmatched TRIER rows from this purchase
+            for trier_idx in trier_indices:
+                if trier_idx not in used_trier_indices:
+                    row_t = t.loc[trier_idx]
+                    
+                    trier_name = f"{row_t['cliente_name']} — PARCELA {row_t['parcela_n_trier']}/{row_t['parcela_total_trier']}"
+                    
+                    out.append([
+                        row_t['filial'],
+                        row_t['data_emissao'].strftime("%d/%m/%Y"),
+                        "-",
+                        "-",
+                        trier_name,
+                        format_brl(row_t['valor_parcela_num']),
+                        "⚠️ SOMENTE TRIER",
+                        ""
+                    ])
+                    used_trier_indices.add(trier_idx)
+        else:
+            # No matching purchase found - all CREDCOMMERCE rows are "SOMENTE CREDCOMMERCE"
+            for cred_idx in cred_indices:
+                row_c = c.loc[cred_idx]
+                
+                cred_name = f"{row_c['cliente_name']} — PARCELA {row_c['parcela_n_cred']}"
+                
+                out.append([
+                    row_c['filial'],
+                    row_c['data_emissao'].strftime("%d/%m/%Y"),
+                    cred_name,
+                    format_brl(row_c['valor_parcela_num']),
+                    "-",
+                    "-",
+                    "⚠️ SOMENTE CREDCOMMERCE",
+                    ""
+                ])
+                used_cred_indices.add(cred_idx)
     
-    # Process remaining TRIER purchases (SOMENTE TRIER)
+    # Add remaining TRIER purchases (SOMENTE TRIER)
     for trier_key, trier_indices in trier_purchases.items():
-        if trier_key in used_trier_purchases:
-            continue
-            
-        for idx in trier_indices:
-            row_t = t.loc[idx]
-            
-            t_cliente = str(row_t.get('cliente_name', '')).strip()
-            
-            # Extract CPF for display
-            cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', t_cliente)
-            cpf_display = f" ({cpf_match.group(1)})" if cpf_match else ""
-            
-            t_name = f"{t_cliente} — PARCELA {row_t.get('parcela_n')}/{row_t.get('parcela_total')}{cpf_display}"
-            
-            out.append([
-                format_value_for_json(row_t.get('filial', '')),
-                row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
-                "-",
-                "-",
-                t_name,
-                format_brl(row_t.get('valor_parcela_num', 0)),
-                "⚠️ SOMENTE TRIER",
-                ""  # Placeholder for annotations
-            ])
-
-    # Sort by Filial then date
-    def sort_key(row):
-        filial = row[0]
-        data = row[1]
-        return (filial, data)
+        for trier_idx in trier_indices:
+            if trier_idx not in used_trier_indices:
+                row_t = t.loc[trier_idx]
+                
+                trier_name = f"{row_t['cliente_name']} — PARCELA {row_t['parcela_n_trier']}/{row_t['parcela_total_trier']}"
+                
+                out.append([
+                    row_t['filial'],
+                    row_t['data_emissao'].strftime("%d/%m/%Y"),
+                    "-",
+                    "-",
+                    trier_name,
+                    format_brl(row_t['valor_parcela_num']),
+                    "⚠️ SOMENTE TRIER",
+                    ""
+                ])
     
-    out.sort(key=sort_key)
+    # Sort by Filial and Date
+    out.sort(key=lambda x: (x[0], x[1]))
     return out
 
 
@@ -593,7 +497,6 @@ def main():
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         
-        # Load credentials
         creds_json = os.environ.get("GSERVICE_JSON")
         if not creds_json:
             print("Error: GSERVICE_JSON environment variable not set")
@@ -626,7 +529,6 @@ def main():
         # Get or create output worksheet
         try:
             ws_out = sh.worksheet(SHEET_OUT)
-            # Read existing annotations before clearing
             annotations = read_existing_annotations(ws_out)
             ws_out.clear()
         except gspread.WorksheetNotFound:
@@ -637,24 +539,25 @@ def main():
         # Apply annotations to rows
         for row in rows:
             # Create composite key for annotation lookup
+            filial = row[0]
+            data = row[1]
             cred_text = row[2] if row[2] != "-" else ""
             trier_text = row[4] if row[4] != "-" else ""
-            
-            combined_text = cred_text + " " + trier_text
-            
-            # Extract CPF and parcela
-            cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', combined_text)
-            parcela_match = re.search(r'PARCELA (\d+)/(\d+)', combined_text)
             valor = row[3] if row[3] != "-" else row[5]
             
-            if cpf_match and parcela_match:
-                cpf_digits = re.sub(r"\D", "", cpf_match.group(1))
-                parcela_key = parcela_match.group(0).replace("PARCELA ", "")
-                composite_key = f"{cpf_digits}|{parcela_key}|{valor}"
-                
-                # Apply annotation if exists
-                if composite_key in annotations:
-                    row[7] = annotations[composite_key]  # Anotações column
+            combined_text = cred_text + " " + trier_text
+            parcela_match = re.search(r'PARCELA (\d+)/(\d+)', combined_text)
+            if not parcela_match:
+                parcela_match = re.search(r'— PARCELA (\d+)', combined_text)
+            
+            if parcela_match:
+                parcela_key = parcela_match.group(0)
+                composite_key = f"{filial}|{data}|{parcela_key}|{valor}"
+            else:
+                composite_key = f"{filial}|{data}|{combined_text}|{valor}"
+            
+            if composite_key in annotations:
+                row[7] = annotations[composite_key]
         
         # Prepare values with header
         values = [HEADER] + rows
