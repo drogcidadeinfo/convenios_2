@@ -2,7 +2,7 @@ import re
 import os
 import json
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 import gspread
@@ -33,7 +33,7 @@ HEADER = [
 ]
 
 VALUE_TOL = 0.75   # tolerância para diferença de valores
-PARCELA_VALUE_TOL = 0.10  # tolerância menor para diferença entre parcelas do mesmo grupo
+DATE_TOL_DAYS = 5  # tolerância de dias para considerar mesma compra
 
 # Color mapping for STATUS
 COLOR_MAP = {
@@ -44,7 +44,7 @@ COLOR_MAP = {
     "⚠️ VALORES DIVERGENTES": {"red": 1.0, "green": 0.7, "blue": 0.7}  # Darker red for value mismatch
 }
 
-# Column mappings (original -> normalized) - expanded to handle variations
+# Column mappings (original -> normalized)
 COLUMN_MAPPING = {
     'filial': 'filial',
     'data': 'data',
@@ -198,7 +198,7 @@ def normalize_cpf(x):
 
 def read_existing_annotations(ws_out) -> dict:
     """
-    Read only the Anotações column, keyed by a composite key (CPF + Parcela)
+    Read only the Anotações column, keyed by a composite key (CPF + Parcela + Valor Total)
     """
     values = ws_out.get_all_values()
     if not values:
@@ -208,11 +208,11 @@ def read_existing_annotations(ws_out) -> dict:
     for row in values[1:]:  # Skip header
         row = row + [""] * (10 - len(row))
 
-        # Extract CPF and parcela from the text (without parentheses)
+        # Extract CPF and parcela from the text
         trier_text = row[2] or ""
         bg_text = row[5] or ""
         
-        # Extract CPF (without parentheses)
+        # Extract CPF
         cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', trier_text + " " + bg_text)
         if not cpf_match:
             continue
@@ -227,17 +227,18 @@ def read_existing_annotations(ws_out) -> dict:
         parcela_num = parcela_match.group(1)
         parcela_total = parcela_match.group(2)
         parcela_key = f"{parcela_num}/{parcela_total}"
+        
+        # Get valor total to help identify the purchase
+        valor_total = row[4] if row[4] != "-" else row[7]  # TRIER total or BGCARD total
 
         # Create composite key
-        composite_key = f"{cpf_digits}|{parcela_key}"
+        composite_key = f"{cpf_digits}|{parcela_key}|{valor_total}"
 
         # Get annotation from column J (index 9)
         anot = (row[9] or "").strip()
         
         # Store by composite key
         if composite_key not in annotations and anot:
-            annotations[composite_key] = anot
-        elif anot and composite_key in annotations and not annotations[composite_key]:
             annotations[composite_key] = anot
 
     return annotations
@@ -283,6 +284,46 @@ def apply_status_coloring(ws, num_rows: int):
                 
     except Exception as e:
         print(f"Note: Could not apply status coloring: {e}")
+
+
+def group_parcels_by_purchase(df):
+    """
+    Group TRIER rows by purchase (CPF + Valor Total + approximate date)
+    Returns a dictionary with purchase keys and lists of parcel indices
+    """
+    purchases = {}
+    
+    for idx, row in df.iterrows():
+        cpf = row.get('cpf', '')
+        valor_total = row.get('valor_total_num', 0)
+        data = row.get('data_emissao')
+        
+        if not cpf or not data:
+            continue
+            
+        # Round valor_total to 2 decimals to handle small differences
+        valor_total_rounded = round(valor_total, 2)
+        
+        # Find matching purchase group
+        found_group = False
+        for purchase_key in purchases.keys():
+            p_cpf, p_valor, p_data = purchase_key.split('|')
+            p_valor = float(p_valor)
+            p_data = datetime.strptime(p_data, '%Y-%m-%d').date()
+            
+            if (cpf == p_cpf and 
+                abs(valor_total_rounded - p_valor) <= VALUE_TOL and
+                abs((data - p_data).days) <= DATE_TOL_DAYS):
+                purchases[purchase_key].append(idx)
+                found_group = True
+                break
+        
+        if not found_group:
+            # Create new purchase group
+            purchase_key = f"{cpf}|{valor_total_rounded}|{data.isoformat()}"
+            purchases[purchase_key] = [idx]
+    
+    return purchases
 
 
 # ----------------------------
@@ -361,148 +402,156 @@ def build_rows(df_trier, df_bg):
             else:
                 df['filial'] = ""
 
-    used_bg = set()
-    used_trier = set()  # Track which TRIER rows we've used
+    # Group TRIER rows by purchase
+    trier_purchases = group_parcels_by_purchase(t) if not t.empty else {}
+    
+    # Track used purchases
+    used_trier_purchases = set()
+    used_bg_rows = set()
     out = []
     
-    # Create lookup dictionary for BGCARD rows by CPF
-    bg_by_cpf = {}
+    # Process each BGCARD row and find matching TRIER purchase
     if not b.empty:
         for j, row_b in b.iterrows():
-            cpf = row_b.get('cpf', '')
-            if cpf:
-                if cpf not in bg_by_cpf:
-                    bg_by_cpf[cpf] = []
-                bg_by_cpf[cpf].append(j)
-
-    # First, process matches based on parcela number
-    if not t.empty and not b.empty:
-        for j, row_b in b.iterrows():
             bg_cpf = row_b.get('cpf', '')
+            bg_valor_total = row_b.get('valor_total_num', 0)
+            bg_data = row_b.get('data_emissao')
             bg_parcela_n = row_b.get('parcela_n')
             bg_parcela_total = row_b.get('parcela_total')
             
-            if not bg_cpf or not bg_parcela_n:
+            if not bg_cpf or not bg_data:
+                # Skip rows without required data
                 continue
                 
-            # Find matching TRIER row with same CPF and same parcela number
-            matching_trier_idx = None
-            best_value_diff = float('inf')
+            # Find matching TRIER purchase
+            matching_purchase_key = None
+            best_match_score = float('inf')
             
-            for i, row_t in t.iterrows():
-                if i in used_trier:
+            for purchase_key, trier_indices in trier_purchases.items():
+                if purchase_key in used_trier_purchases:
                     continue
                     
-                trier_cpf = row_t.get('cpf', '')
-                trier_parcela_n = row_t.get('parcela_n')
+                p_cpf, p_valor, p_data = purchase_key.split('|')
+                p_valor = float(p_valor)
+                p_data = datetime.strptime(p_data, '%Y-%m-%d').date()
                 
-                if trier_cpf != bg_cpf or trier_parcela_n != bg_parcela_n:
+                # Check if CPF matches
+                if bg_cpf != p_cpf:
                     continue
                 
-                # Check if total parcelas match
-                trier_parcela_total = row_t.get('parcela_total')
-                total_parcelas_match = (trier_parcela_total == bg_parcela_total)
+                # Check if valor total matches within tolerance
+                valor_diff = abs(bg_valor_total - p_valor)
+                if valor_diff > VALUE_TOL:
+                    continue
                 
-                # Check values with tolerance
-                val_t = row_t.get('valor_parcela_num', 0)
-                val_b = row_b.get('valor_parcela_num', 0)
-                value_diff = abs(val_t - val_b)
+                # Check if date is within tolerance
+                date_diff = abs((bg_data - p_data).days)
+                if date_diff > DATE_TOL_DAYS:
+                    continue
                 
-                total_t = row_t.get('valor_total_num', 0)
-                total_b = row_b.get('valor_total_num', 0)
-                total_diff = abs(total_t - total_b)
-                
-                # If values are within tolerance, this is a good match
-                if value_diff <= VALUE_TOL and total_diff <= VALUE_TOL:
-                    matching_trier_idx = i
-                    break
-                elif value_diff < best_value_diff:
-                    best_value_diff = value_diff
-                    matching_trier_idx = i
+                # This is a potential match
+                if valor_diff < best_match_score:
+                    best_match_score = valor_diff
+                    matching_purchase_key = purchase_key
             
-            if matching_trier_idx is not None:
-                used_bg.add(j)
-                used_trier.add(matching_trier_idx)
-                row_t = t.loc[matching_trier_idx]
+            if matching_purchase_key:
+                # Found a matching purchase
+                used_trier_purchases.add(matching_purchase_key)
+                used_bg_rows.add(j)
                 
-                # Format names
-                trier_cliente = str(row_t.get('cliente_name', '')).strip()
+                trier_indices = trier_purchases[matching_purchase_key]
+                
+                # Find the TRIER row with matching parcela number
+                matching_trier_idx = None
+                for idx in trier_indices:
+                    row_t = t.loc[idx]
+                    if row_t.get('parcela_n') == bg_parcela_n:
+                        matching_trier_idx = idx
+                        break
+                
+                # If no exact parcela match, use the first one
+                if matching_trier_idx is None and trier_indices:
+                    matching_trier_idx = trier_indices[0]
+                
+                if matching_trier_idx is not None:
+                    row_t = t.loc[matching_trier_idx]
+                    
+                    # Format names
+                    trier_cliente = str(row_t.get('cliente_name', '')).strip()
+                    bg_cliente = str(row_b.get('cliente_name', '')).strip()
+                    
+                    trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
+                    bg_parcela = f"{bg_parcela_n}/{bg_parcela_total}" if bg_parcela_n and bg_parcela_total else "?/?"
+                    
+                    trier_name = f"{trier_cliente} — PARCELA {trier_parcela}"
+                    bg_name = f"{bg_cliente} — PARCELA {bg_parcela}"
+                    
+                    # Check if total parcelas match
+                    if row_t.get('parcela_total') == bg_parcela_total:
+                        status = "✅ OK"
+                    else:
+                        status = "⚠️ NUM DE PARCELAS DIVERGENTES"
+                    
+                    out.append([
+                        format_value_for_json(row_t.get('filial', '')),
+                        row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
+                        trier_name,
+                        format_brl(row_t.get('valor_parcela_num', 0)),
+                        format_brl(row_t.get('valor_total_num', 0)),
+                        bg_name,
+                        format_brl(row_b.get('valor_parcela_num', 0)),
+                        format_brl(row_b.get('valor_total_num', 0)),
+                        status,
+                        ""  # Placeholder for annotations
+                    ])
+            else:
+                # No matching purchase found in TRIER
                 bg_cliente = str(row_b.get('cliente_name', '')).strip()
-                
-                trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
-                bg_parcela = f"{row_b.get('parcela_n', '?')}/{row_b.get('parcela_total', '?')}"
-                
-                trier_name = f"{trier_cliente} — PARCELA {trier_parcela}"
+                bg_parcela = f"{bg_parcela_n}/{bg_parcela_total}" if bg_parcela_n and bg_parcela_total else "?/?"
                 bg_name = f"{bg_cliente} — PARCELA {bg_parcela}"
-
-                # Check status
-                if row_t.get('parcela_total') == row_b.get('parcela_total'):
-                    status = "✅ OK"
-                else:
-                    status = "⚠️ NUM DE PARCELAS DIVERGENTES"
-
+                
                 out.append([
-                    format_value_for_json(row_t.get('filial', '')),
-                    row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
-                    trier_name,
-                    format_brl(row_t.get('valor_parcela_num', 0)),
-                    format_brl(row_t.get('valor_total_num', 0)),
+                    format_value_for_json(row_b.get('filial', '')),
+                    row_b['data_emissao'].strftime("%d/%m/%Y") if row_b.get('data_emissao') else '',
+                    "-",
+                    "-",
+                    "-",
                     bg_name,
                     format_brl(row_b.get('valor_parcela_num', 0)),
                     format_brl(row_b.get('valor_total_num', 0)),
-                    status,
+                    "⚠️ SOMENTE BGCARD",
                     ""  # Placeholder for annotations
                 ])
-
-    # Process remaining TRIER rows (SOMENTE TRIER)
-    if not t.empty:
-        for i, row_t in t.iterrows():
-            if i in used_trier:
-                continue
-                
-            trier_cpf = row_t.get('cpf', '')
+    
+    # Process remaining TRIER purchases (SOMENTE TRIER)
+    for purchase_key, trier_indices in trier_purchases.items():
+        if purchase_key in used_trier_purchases:
+            continue
             
-            # Check if this CPF has ANY matches in BGCARD
-            has_bg_matches = trier_cpf in bg_by_cpf
+        # For each purchase, show the first parcel (usually parcela 1)
+        # Sort indices by parcela number to find the first one
+        sorted_indices = sorted(trier_indices, 
+                              key=lambda idx: (t.loc[idx].get('parcela_n', float('inf'))))
+        
+        if sorted_indices:
+            # Show the first parcel of this purchase
+            idx = sorted_indices[0]
+            row_t = t.loc[idx]
             
-            if not has_bg_matches:
-                trier_cliente = str(row_t.get('cliente_name', '')).strip()
-                trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
-                trier_name = f"{trier_cliente} — PARCELA {trier_parcela}"
-
-                out.append([
-                    format_value_for_json(row_t.get('filial', '')),
-                    row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
-                    trier_name,
-                    format_brl(row_t.get('valor_parcela_num', 0)),
-                    format_brl(row_t.get('valor_total_num', 0)),
-                    "-",
-                    "-",
-                    "-",
-                    "⚠️ SOMENTE TRIER",
-                    ""  # Placeholder for annotations
-                ])
-
-    # Process remaining BGCARD rows (SOMENTE BGCARD)
-    if not b.empty:
-        for j, row_b in b.iterrows():
-            if j in used_bg:
-                continue
-
-            bg_cliente = str(row_b.get('cliente_name', '')).strip()
-            bg_parcela = f"{row_b.get('parcela_n', '?')}/{row_b.get('parcela_total', '?')}"
-            bg_name = f"{bg_cliente} — PARCELA {bg_parcela}"
-
+            trier_cliente = str(row_t.get('cliente_name', '')).strip()
+            trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
+            trier_name = f"{trier_cliente} — PARCELA {trier_parcela}"
+            
             out.append([
-                format_value_for_json(row_b.get('filial', '')),
-                row_b['data_emissao'].strftime("%d/%m/%Y") if row_b.get('data_emissao') else '',
+                format_value_for_json(row_t.get('filial', '')),
+                row_t['data_emissao'].strftime("%d/%m/%Y") if row_t.get('data_emissao') else '',
+                trier_name,
+                format_brl(row_t.get('valor_parcela_num', 0)),
+                format_brl(row_t.get('valor_total_num', 0)),
                 "-",
                 "-",
                 "-",
-                bg_name,
-                format_brl(row_b.get('valor_parcela_num', 0)),
-                format_brl(row_b.get('valor_total_num', 0)),
-                "⚠️ SOMENTE BGCARD",
+                "⚠️ SOMENTE TRIER",
                 ""  # Placeholder for annotations
             ])
 
@@ -579,14 +628,15 @@ def main():
             trier_text = row[2] if row[2] != "-" else ""
             bg_text = row[5] if row[5] != "-" else ""
             
-            # Extract CPF and parcela (without parentheses)
+            # Extract CPF and parcela
             cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', trier_text + " " + bg_text)
             parcela_match = re.search(r'PARCELA (\d+)/(\d+)', trier_text + " " + bg_text)
+            valor_total = row[4] if row[4] != "-" else row[7]
             
             if cpf_match and parcela_match:
                 cpf_digits = re.sub(r"\D", "", cpf_match.group(1))
                 parcela_key = parcela_match.group(0).replace("PARCELA ", "")
-                composite_key = f"{cpf_digits}|{parcela_key}"
+                composite_key = f"{cpf_digits}|{parcela_key}|{valor_total}"
                 
                 # Apply annotation if exists
                 if composite_key in annotations:
