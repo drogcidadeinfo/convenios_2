@@ -14,9 +14,9 @@ from google.oauth2.service_account import Credentials
 # ----------------------------
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 
-SHEET_CREDCOMMERCE = "credcommerse"  # Note: typo in your sheet name
-SHEET_TRIER = "dados_trier_sind"
-SHEET_OUT = "TRIERxSIND"
+SHEET_CREDCOMMERCE = "dados_cred_commerce"  # Note: typo in your sheet name
+SHEET_TRIER = "dados_trier"
+SHEET_OUT = "TRIERxCREDCOM"
 
 HEADER = [
     "Filial",
