@@ -116,7 +116,7 @@ try:
     WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "selecao_periodo_1"))).click()
     time.sleep(2)
 
-    driver.find_element(By.ID, "dat_init").send_keys(target_day)
+    driver.find_element(By.ID, "dat_init").send_keys("14032026")
     time.sleep(5)
     driver.find_element(By.ID, "dat_fim").send_keys(target_day)
     time.sleep(2)
