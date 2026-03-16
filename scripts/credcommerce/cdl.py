@@ -404,7 +404,7 @@ def main():
         target_day = yesterday.day
         test_day = 1  # Start day
         
-        logging.info(f"📅 Filter dates: start={test_day}, end={target_day}")
+        logging.info(f"📅 Filter dates: start={target_day}, end={target_day}")
         
         # Process each account
         all_dfs = []
