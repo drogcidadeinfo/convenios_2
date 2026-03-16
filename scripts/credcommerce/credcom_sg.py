@@ -165,7 +165,7 @@ def main():
 
     all_dfs = []
     for acc in accounts:
-        df_acc = extract_for_account(acc, target_day=target_day, test_day=test_day)
+        df_acc = extract_for_account(acc, target_day=target_day, test_day=target_day)
         if not df_acc.empty:
             all_dfs.append(df_acc)
 
