@@ -100,7 +100,7 @@ for cnpj, num_filial in cnpjs.items():
             wait.until(EC.element_to_be_clickable((By.XPATH, '/html/body/table[2]/tbody/tr[1]/td/form/table[2]/tbody/tr/td[5]/a'))).click()
 
             campo_data_inicio = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="f_date1"]')))
-            campo_data_inicio.send_keys(target_day)
+            campo_data_inicio.send_keys("14/03/2026")
 
             campo_data_fim = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="f_date2"]')))
             campo_data_fim.send_keys(target_day)
