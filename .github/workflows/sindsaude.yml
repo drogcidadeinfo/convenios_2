@@ -2,8 +2,8 @@ name: sindsaude daily update
 
 on:
   workflow_dispatch: 
-  #schedule:
-    #- cron: '0 6 * * *'  # Runs every day at 3am GMT-3
+  schedule:
+    - cron: '0 6 * * *'  
 
 permissions: write-all # Give the workflow permission to write to the repository
 
