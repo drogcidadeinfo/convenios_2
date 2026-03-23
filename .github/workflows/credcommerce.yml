@@ -20,28 +20,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install selenium pandas openpyxl xlrd numpy gspread google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client packaging
 
-      - name: Run extraction for all cities
-        env:
-          CRED_COMM_ACC_JSON: ${{ secrets.CRED_COMM_ACC_JSON }}
-          CDL_ACC_JSON: ${{ secrets.CDL_ACC_JSON }}
-          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          WORKSHEET_NAME: dados_cred_commerce
-        run: |
-          python scripts/credcommerce/credcom_sg.py
-          python scripts/credcommerce/cdl.py
+      #- name: Run extraction for all cities
+        #env:
+          #CRED_COMM_ACC_JSON: ${{ secrets.CRED_COMM_ACC_JSON }}
+          #CDL_ACC_JSON: ${{ secrets.CDL_ACC_JSON }}
+          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          #WORKSHEET_NAME: dados_cred_commerce
+        #run: |
+          #python scripts/credcommerce/credcom_sg.py
+          #python scripts/credcommerce/cdl.py
 
-      - name: Download trier file
-        env:
-          username: ${{ secrets.USERNAME }}
-          password: ${{ secrets.PASSWORD }}
-        run: python scripts/credcommerce/trier_credcom_all.py
+      #- name: Download trier file
+        #env:
+          #username: ${{ secrets.USERNAME }}
+          #password: ${{ secrets.PASSWORD }}
+        #run: python scripts/credcommerce/trier_credcom_all.py
 
-      - name: Upload trier file
-        env:
-          GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python scripts/credcommerce/proc_trier_credcom_all.py
+      #- name: Upload trier file
+        #env:
+          #GSERVICE_JSON: ${{ secrets.GSERVICE_JSON }}
+          #SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        #run: python scripts/credcommerce/proc_trier_credcom_all.py
         
       - name: Update TRIERxCREDCOM sheet
         env:
