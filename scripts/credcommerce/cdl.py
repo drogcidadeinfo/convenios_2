@@ -402,7 +402,7 @@ def main():
         # Calculate dates
         yesterday = datetime.now() - timedelta(days=1)
         target_day = yesterday.day
-        test_day = 1  # Start day
+        test_day = yesterday.day
         
         logging.info(f"📅 Filter dates: start={target_day}, end={target_day}")
         
