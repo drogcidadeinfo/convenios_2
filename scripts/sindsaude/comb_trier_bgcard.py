@@ -71,6 +71,19 @@ def normalize_colname(x):
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"\s+", " ", s).strip()
 
+def normalize_money_key(v):
+    """Convert BRL formatted string to normalized float string for key usage."""
+    if not v or v == "-":
+        return "0.00"
+    
+    v = str(v)
+    v = re.sub(r"[^\d,.-]", "", v)  # remove R$, spaces, etc
+    v = v.replace(".", "").replace(",", ".")
+    
+    try:
+        return f"{float(v):.2f}"
+    except:
+        return "0.00"
 
 def normalize_df_columns(df):
     """Normalize DataFrame columns and map to expected names."""
@@ -229,7 +242,9 @@ def read_existing_annotations(ws_out) -> dict:
         parcela_key = f"{parcela_num}/{parcela_total}"
         
         # Get valor total to help identify the purchase
-        valor_total = row[4] if row[4] != "-" else row[7]  # TRIER total or BGCARD total
+        # valor_total = row[4] if row[4] != "-" else row[7]  # TRIER total or BGCARD total
+        valor_total_raw = row[4] if row[4] != "-" else row[7]
+        valor_total = normalize_money_key(valor_total_raw)
 
         # Create composite key
         composite_key = f"{cpf_digits}|{parcela_key}|{valor_total}"
@@ -631,7 +646,9 @@ def main():
             # Extract CPF and parcela
             cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', trier_text + " " + bg_text)
             parcela_match = re.search(r'PARCELA (\d+)/(\d+)', trier_text + " " + bg_text)
-            valor_total = row[4] if row[4] != "-" else row[7]
+            # valor_total = row[4] if row[4] != "-" else row[7]
+            valor_total_raw = row[4] if row[4] != "-" else row[7]
+            valor_total = normalize_money_key(valor_total_raw)
             
             if cpf_match and parcela_match:
                 cpf_digits = re.sub(r"\D", "", cpf_match.group(1))
