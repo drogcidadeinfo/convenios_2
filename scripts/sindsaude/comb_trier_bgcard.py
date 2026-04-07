@@ -72,20 +72,6 @@ def normalize_colname(x):
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"\s+", " ", s).strip()
 
-def normalize_money_key(v):
-    """Convert BRL formatted string to normalized float string for key usage."""
-    if not v or v == "-":
-        return "0.00"
-    
-    v = str(v)
-    v = re.sub(r"[^\d,.-]", "", v)  # remove R$, spaces, etc
-    v = v.replace(".", "").replace(",", ".")
-    
-    try:
-        return f"{float(v):.2f}"
-    except:
-        return "0.00"
-
 def normalize_df_columns(df):
     """Normalize DataFrame columns and map to expected names."""
     if df.empty:
@@ -544,7 +530,8 @@ def build_rows(df_trier, df_bg):
                 "-",
                 "-",
                 "⚠️ SOMENTE TRIER",
-                ""  # Placeholder for annotations
+                "",  # Anotação 
+                key, # _KEY
             ])
 
     # Sort by Filial then CPF (extracted from name)
@@ -616,6 +603,9 @@ def main():
         
         # Apply annotations using _KEY (column index 10)
         for row in rows:
+            if len(row) < 11:
+                continue
+                
             key = row[10]
             if key in annotations:
                 row[9] = annotations[key]
