@@ -29,7 +29,8 @@ HEADER = [
     "Valor Parcela",
     "Valor Total",
     "STATUS",
-    "Anotações"
+    "Anotações",
+    "_KEY"
 ]
 
 VALUE_TOL = 0.75   # tolerância para diferença de valores
@@ -209,55 +210,23 @@ def normalize_cpf(x):
     return clean_cpf(x)
 
 
-def read_existing_annotations(ws_out) -> dict:
-    """
-    Read only the Anotações column, keyed by a composite key (CPF + Parcela + Valor Total)
-    """
+def read_existing_annotations(ws_out):
     values = ws_out.get_all_values()
     if not values:
         return {}
 
     annotations = {}
-    for row in values[1:]:  # Skip header
-        row = row + [""] * (10 - len(row))
 
-        # Extract CPF and parcela from the text
-        trier_text = row[2] or ""
-        bg_text = row[5] or ""
-        
-        # Extract CPF
-        cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', trier_text + " " + bg_text)
-        if not cpf_match:
-            continue
-            
-        cpf_digits = re.sub(r"\D", "", cpf_match.group(1))
-        
-        # Extract parcela info
-        parcela_match = re.search(r'PARCELA (\d+)/(\d+)', trier_text + " " + bg_text)
-        if not parcela_match:
-            continue
-            
-        parcela_num = parcela_match.group(1)
-        parcela_total = parcela_match.group(2)
-        parcela_key = f"{parcela_num}/{parcela_total}"
-        
-        # Get valor total to help identify the purchase
-        # valor_total = row[4] if row[4] != "-" else row[7]  # TRIER total or BGCARD total
-        valor_total_raw = row[4] if row[4] != "-" else row[7]
-        valor_total = normalize_money_key(valor_total_raw)
+    for row in values[1:]:
+        row = row + [""] * 11  # adjust length if needed
 
-        # Create composite key
-        composite_key = f"{cpf_digits}|{parcela_key}|{valor_total}"
+        key = row[10]   # index of your _KEY column
+        anot = row[9]   # Anotações column
 
-        # Get annotation from column J (index 9)
-        anot = (row[9] or "").strip()
-        
-        # Store by composite key
-        if composite_key not in annotations and anot:
-            annotations[composite_key] = anot
+        if key and anot:
+            annotations[key] = anot
 
     return annotations
-
 
 def apply_status_coloring(ws, num_rows: int):
     """
@@ -506,6 +475,8 @@ def build_rows(df_trier, df_bg):
                         status = "✅ OK"
                     else:
                         status = "⚠️ NUM DE PARCELAS DIVERGENTES"
+
+                    key = f"{row_t.get('cpf')}|{row_t.get('parcela_n')}|{round(row_t.get('valor_total_num', 0), 2)}"
                     
                     out.append([
                         format_value_for_json(row_t.get('filial', '')),
@@ -517,13 +488,16 @@ def build_rows(df_trier, df_bg):
                         format_brl(row_b.get('valor_parcela_num', 0)),
                         format_brl(row_b.get('valor_total_num', 0)),
                         status,
-                        ""  # Placeholder for annotations
+                        "", # Anotações
+                        key   # _KEY
                     ])
             else:
                 # No matching purchase found in TRIER
                 bg_cliente = str(row_b.get('cliente_name', '')).strip()
                 bg_parcela = f"{bg_parcela_n}/{bg_parcela_total}" if bg_parcela_n and bg_parcela_total else "?/?"
                 bg_name = f"{bg_cliente} — PARCELA {bg_parcela}"
+
+                key = f"{row_b.get('cpf')}|{bg_parcela_n}|{round(row_b.get('valor_total_num', 0), 2)}"
                 
                 out.append([
                     format_value_for_json(row_b.get('filial', '')),
@@ -535,7 +509,8 @@ def build_rows(df_trier, df_bg):
                     format_brl(row_b.get('valor_parcela_num', 0)),
                     format_brl(row_b.get('valor_total_num', 0)),
                     "⚠️ SOMENTE BGCARD",
-                    ""  # Placeholder for annotations
+                    "",  # Anotações
+                    key # _KEY
                 ])
     
     # Process remaining TRIER purchases (SOMENTE TRIER)
@@ -556,6 +531,8 @@ def build_rows(df_trier, df_bg):
             trier_cliente = str(row_t.get('cliente_name', '')).strip()
             trier_parcela = f"{row_t.get('parcela_n', '?')}/{row_t.get('parcela_total', '?')}"
             trier_name = f"{trier_cliente} — PARCELA {trier_parcela}"
+
+            key = f"{row_t.get('cpf')}|{row_t.get('parcela_n')}|{round(row_t.get('valor_total_num', 0), 2)}"
             
             out.append([
                 format_value_for_json(row_t.get('filial', '')),
@@ -633,31 +610,15 @@ def main():
             annotations = read_existing_annotations(ws_out)
             ws_out.clear()
         except gspread.WorksheetNotFound:
-            ws_out = sh.add_worksheet(title=SHEET_OUT, rows=2000, cols=10)
+            ws_out = sh.add_worksheet(title=SHEET_OUT, rows=2000, cols=11)
             annotations = {}
             print(f"Created new worksheet: {SHEET_OUT}")
-
-        # Apply annotations to rows
+        
+        # Apply annotations using _KEY (column index 10)
         for row in rows:
-            # Create composite key for annotation lookup
-            trier_text = row[2] if row[2] != "-" else ""
-            bg_text = row[5] if row[5] != "-" else ""
-            
-            # Extract CPF and parcela
-            cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', trier_text + " " + bg_text)
-            parcela_match = re.search(r'PARCELA (\d+)/(\d+)', trier_text + " " + bg_text)
-            # valor_total = row[4] if row[4] != "-" else row[7]
-            valor_total_raw = row[4] if row[4] != "-" else row[7]
-            valor_total = normalize_money_key(valor_total_raw)
-            
-            if cpf_match and parcela_match:
-                cpf_digits = re.sub(r"\D", "", cpf_match.group(1))
-                parcela_key = parcela_match.group(0).replace("PARCELA ", "")
-                composite_key = f"{cpf_digits}|{parcela_key}|{valor_total}"
-                
-                # Apply annotation if exists
-                if composite_key in annotations:
-                    row[9] = annotations[composite_key]  # Anotações column
+            key = row[10]
+            if key in annotations:
+                row[9] = annotations[key]
         
         # Prepare values with header
         values = [HEADER] + rows
